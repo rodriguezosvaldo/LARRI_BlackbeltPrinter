@@ -1,5 +1,7 @@
+import json
 import time
 import os
+from pathlib import Path
 import requests
 from typing import Any, Optional
 from dotenv import load_dotenv
@@ -19,6 +21,8 @@ REQUEST_TIMEOUT = 10       # seconds per HTTP request
 STALL_SECONDS = 60         # job.filePosition without changes -> print stuck
 MCU_TEMP_MAX = 80.0        # alarm if MCU temp > X
 VIN_MIN = 11.0             # alarm if VIN < X V
+LOG_INTERVAL = 5 * 60      # seconds between full OM snapshots
+LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -295,9 +299,17 @@ def derive_cause(m: dict) -> str:
     return "; ".join(reasons) if reasons else "unknown"
 
 
+def log_om_snapshot(m: dict) -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    row = {"ts": time.time(), "model": m}
+    with LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 # ============================ Main loop ============================
 def main() -> None:
     print(f"Starting Duet alarm monitor against {PRINTER_IP}")
+    last_log_at = 0.0
     while True:
         m = get_model()
         if m is not None:
@@ -307,6 +319,11 @@ def main() -> None:
             check_analog_sensors(m)
             check_stall(m)
             check_board(m)
+            now = time.monotonic()
+            if now - last_log_at >= LOG_INTERVAL:
+                log_om_snapshot(m)
+                last_log_at = now
+                print(f"[log] OM snapshot -> {LOG_PATH}")
             t = _safe(m, "state", "time")
             print(f"[{t}] status={status}")
         time.sleep(POLL_INTERVAL)
