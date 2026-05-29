@@ -21,8 +21,9 @@ REQUEST_TIMEOUT = 10       # seconds per HTTP request
 STALL_SECONDS = 60         # job.filePosition without changes -> print stuck
 MCU_TEMP_MAX = 80.0        # alarm if MCU temp > X
 VIN_MIN = 11.0             # alarm if VIN < X V
-LOG_INTERVAL = 5 * 60      # seconds between full OM snapshots
+LOG_INTERVAL = 5 * 60      # seconds between periodic logs
 LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
+CHECKED_LOG_PATH = Path(__file__).resolve().parent / "logs" / "checked_values.jsonl"
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -306,6 +307,27 @@ def log_om_snapshot(m: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def log_checked_snapshot() -> None:
+    now = time.monotonic()
+    row = {
+        "ts": time.time(),
+        "status": prev["status"],
+        "filament": dict(prev["filament"]),
+        "heaters": dict(prev["heaters"]),
+        "analog": dict(prev["analog"]),
+        "file_position": prev["file_position"],
+        "seconds_since_file_position_change": round(
+            now - prev["file_position_changed_at"], 1
+        ),
+        "stalled_alerted": prev["stalled_alerted"],
+        "low_vin_alerted": prev["low_vin_alerted"],
+        "mcu_hot_alerted": prev["mcu_hot_alerted"],
+    }
+    CHECKED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CHECKED_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 # ============================ Main loop ============================
 def main() -> None:
     print(f"Starting Duet alarm monitor against {PRINTER_IP}")
@@ -322,8 +344,10 @@ def main() -> None:
             now = time.monotonic()
             if now - last_log_at >= LOG_INTERVAL:
                 log_om_snapshot(m)
+                log_checked_snapshot()
                 last_log_at = now
                 print(f"[log] OM snapshot -> {LOG_PATH}")
+                print(f"[log] checked values -> {CHECKED_LOG_PATH}")
             t = _safe(m, "state", "time")
             print(f"[{t}] status={status}")
         time.sleep(POLL_INTERVAL)
