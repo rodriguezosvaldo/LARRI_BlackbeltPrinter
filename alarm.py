@@ -104,55 +104,70 @@ def get_reply(printer_ip: str) -> str:
 
 
 # ====================== Previous state (edge detection) ======================
-prev = {
-    "status": None,
-    "filament": {},                # index -> last status
-    "heaters": {},                 # index -> last state
-    "analog": {},                  # index -> last state
-    "file_position": None,
-    "file_position_changed_at": time.monotonic(),
-    "stalled_alerted": False,
-    "low_vin_alerted": False,
-    "mcu_hot_alerted": False,
-}
+def _default_prev() -> dict:
+    return {
+        "status": None,
+        "filament": {},                # index -> last status
+        "heaters": {},                 # index -> last state
+        "analog": {},                  # index -> last state
+        "file_position": None,
+        "file_position_changed_at": time.monotonic(),
+        "stalled_alerted": False,
+        "low_vin_alerted": False,
+        "mcu_hot_alerted": False,
+    }
+
+
+prev_by_printer: dict[str, dict] = {}
+
+
+def _prev(printer_ip: str) -> dict:
+    if printer_ip not in prev_by_printer:
+        prev_by_printer[printer_ip] = _default_prev()
+    return prev_by_printer[printer_ip]
 
 
 # ============================ Checks ============================
-def check_state(m: dict) -> Optional[str]:
+def check_state(m: dict, printer_ip: str, ntfy: str) -> Optional[str]:
     # state.status: main indicator of pause/stop/halt
+    prev = _prev(printer_ip)
     status = _safe(m, "state", "status")
     last = prev["status"]
     if status != last and last is not None:
         if last in PRINTING_STATES and status in STOPPED_STATES:
-            cause = derive_cause(m)
+            cause = derive_cause(m, printer_ip)
             notify(
                 "Print Stopped",
                 f"state {last} -> {status}. Possible cause: {cause}",
                 priority="urgent",
                 tags="octagonal_sign,warning",
+                ntfy=ntfy,
             )
         elif status == "paused" and last not in {"pausing", "paused"}:
             notify(
                 "Print Paused",
-                f"state {last} -> paused. Cause: {derive_cause(m)}",
+                f"state {last} -> paused. Cause: {derive_cause(m, printer_ip)}",
                 priority="high",
                 tags="pause_button",
+                ntfy=ntfy,
             )
         elif status == "halted":
             notify(
                 "Printer Halted",
-                f"state {last} -> halted (emergency stop). Cause: {derive_cause(m)}",
+                f"state {last} -> halted (emergency stop). Cause: {derive_cause(m, printer_ip)}",
                 priority="urgent",
                 tags="rotating_light",
+                ntfy=ntfy,
             )
         elif status == "resuming":
-            notify("Print Resuming", f"state {last} -> resuming", tags="arrow_forward")
+            notify("Print Resuming", f"state {last} -> resuming", tags="arrow_forward", ntfy=ntfy)
     prev["status"] = status
     return status
 
 
-def check_filament(m: dict) -> None:
+def check_filament(m: dict, printer_ip: str, ntfy: str) -> None:
     # sensors.filamentMonitors[n].status: filament out / sensor error
+    prev = _prev(printer_ip)
     monitors = _safe(m, "sensors", "filamentMonitors", default=[]) or []
     status = _safe(m, "state", "status")
     for i, fm in enumerate(monitors):
@@ -167,14 +182,16 @@ def check_filament(m: dict) -> None:
                 f"Filament monitor #{i} status: {s}",
                 priority="urgent" if during_print else "high",
                 tags="warning,scroll",
+                ntfy=ntfy,
             )
         elif s == "ok" and last != "ok":
-            notify("Filament OK", f"Filament monitor #{i} recovered", tags="white_check_mark")
+            notify("Filament OK", f"Filament monitor #{i} recovered", tags="white_check_mark", ntfy=ntfy)
         prev["filament"][i] = s or "unknown"
 
 
-def check_heaters(m: dict) -> None:
+def check_heaters(m: dict, printer_ip: str, ntfy: str) -> None:
     # heat.heaters[n].state: fault or offline
+    prev = _prev(printer_ip)
     heaters = _safe(m, "heat", "heaters", default=[]) or []
     for i, h in enumerate(heaters):
         if not isinstance(h, dict):
@@ -189,12 +206,14 @@ def check_heaters(m: dict) -> None:
                 f"Heater #{i} state={st} current={cur} setpoint={act}",
                 priority="urgent",
                 tags="fire,rotating_light",
+                ntfy=ntfy,
             )
         prev["heaters"][i] = st
 
 
-def check_analog_sensors(m: dict) -> None:
+def check_analog_sensors(m: dict, printer_ip: str, ntfy: str) -> None:
     # sensors.analog[n].state: openCircuit, shortCircuit, timeout, hardwareError, etc
+    prev = _prev(printer_ip)
     sensors = _safe(m, "sensors", "analog", default=[]) or []
     for i, s in enumerate(sensors):
         if not isinstance(s, dict):
@@ -207,12 +226,14 @@ def check_analog_sensors(m: dict) -> None:
                 f"Analog sensor #{i} ({s.get('name', '?')}) state: {st}",
                 priority="urgent",
                 tags="thermometer,warning",
+                ntfy=ntfy,
             )
         prev["analog"][i] = st
 
 
-def check_stall(m: dict) -> None:
+def check_stall(m: dict, printer_ip: str, ntfy: str) -> None:
     # job.filePosition + move.currentMove: detect print stuck
+    prev = _prev(printer_ip)
     status = _safe(m, "state", "status")
     pos = _safe(m, "job", "filePosition")
     now = time.monotonic()
@@ -230,6 +251,7 @@ def check_stall(m: dict) -> None:
                 f"(status={status}, requestedSpeed={req_speed}, extrusionRate={ext_rate})",
                 priority="urgent",
                 tags="hourglass,warning",
+                ntfy=ntfy,
             )
             prev["stalled_alerted"] = True
     else:
@@ -238,8 +260,9 @@ def check_stall(m: dict) -> None:
         prev["stalled_alerted"] = False
 
 
-def check_board(m: dict) -> None:
+def check_board(m: dict, printer_ip: str, ntfy: str) -> None:
     # boards[0].vIn.current and boards[0].mcuTemp.current
+    prev = _prev(printer_ip)
     boards = _safe(m, "boards", default=[]) or []
     for i, b in enumerate(boards):
         if not isinstance(b, dict):
@@ -252,6 +275,7 @@ def check_board(m: dict) -> None:
                     f"Board #{i} VIN={vin:.2f}V (< {VIN_MIN}V)",
                     priority="urgent",
                     tags="electric_plug,warning",
+                    ntfy=ntfy,
                 )
                 prev["low_vin_alerted"] = True
             elif vin >= VIN_MIN + 0.5:
@@ -264,13 +288,14 @@ def check_board(m: dict) -> None:
                     f"Board #{i} MCU={mcu:.1f}C (> {MCU_TEMP_MAX}C)",
                     priority="urgent",
                     tags="fire,warning",
+                    ntfy=ntfy,
                 )
                 prev["mcu_hot_alerted"] = True
             elif mcu < MCU_TEMP_MAX - 5:
                 prev["mcu_hot_alerted"] = False
 
 
-def derive_cause(m: dict) -> str:
+def derive_cause(m: dict, printer_ip: str) -> str:
     # Cross filament + heaters + sensors + autopause + reply to infer the cause
     reasons = []
 
@@ -297,7 +322,7 @@ def derive_cause(m: dict) -> str:
         if name == "autopause" and st not in (None, "idle"):
             reasons.append(f"autopause={st}")
 
-    reply = get_reply()
+    reply = get_reply(printer_ip)
     if reply:
         reasons.append(f"reply='{reply[:200]}'")
 
@@ -312,6 +337,7 @@ def log_om_snapshot(m: dict, printer_ip: str) -> None:
 
 
 def log_checked_snapshot(m: dict, printer_ip: str) -> None:
+    prev = _prev(printer_ip)
     row = {
         "ts": time.time(),
         "status": _safe(m, "state", "status"),
@@ -340,13 +366,13 @@ def log_checked_snapshot(m: dict, printer_ip: str) -> None:
     with CHECKED_LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
-def check_printer(m: dict, last_log_at: float, printer_ip: str) -> bool:
-    status = check_state(m)
-    check_filament(m)
-    check_heaters(m)
-    check_analog_sensors(m)
-    check_stall(m)
-    check_board(m)
+def check_printer(m: dict, last_log_at: float, printer_ip: str, ntfy: str) -> bool:
+    status = check_state(m, printer_ip, ntfy)
+    check_filament(m, printer_ip, ntfy)
+    check_heaters(m, printer_ip, ntfy)
+    check_analog_sensors(m, printer_ip, ntfy)
+    check_stall(m, printer_ip, ntfy)
+    check_board(m, printer_ip, ntfy)
     now = time.monotonic()
     print(f"[{printer_ip}] status={status}")
     if now - last_log_at >= LOG_INTERVAL:
@@ -366,9 +392,9 @@ def main() -> None:
         m2 = get_model(PRINTER2_IP)
         logged = False
         if m1 is not None:
-            logged = check_printer(m1, last_log_at, PRINTER1_IP) or logged
+            logged = check_printer(m1, last_log_at, PRINTER1_IP, NTFY1) or logged
         if m2 is not None:
-            logged = check_printer(m2, last_log_at, PRINTER2_IP) or logged
+            logged = check_printer(m2, last_log_at, PRINTER2_IP, NTFY2) or logged
         if logged:
             last_log_at = time.monotonic()
         time.sleep(POLL_INTERVAL)
