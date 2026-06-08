@@ -8,11 +8,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PRINTER_IP = os.getenv("PRINTER_IP")
-NTFY = os.getenv("NTFY")
+PRINTER1_IP = os.getenv("PRINTER1_IP")
+PRINTER2_IP = os.getenv("PRINTER2_IP")
+NTFY1 = os.getenv("NTFY1")
+NTFY2 = os.getenv("NTFY2")
 # Create a .env file in the root directory with the following content:
-# PRINTER_IP=http://YourPrinterIP
-# NTFY=https://ntfy.sh/YourNTFYTopic
+# PRINTER1_IP=http://YourPrinter1IP
+# PRINTER2_IP=http://YourPrinter2IP
+# NTFY1=https://ntfy.sh/YourNTFY1Topic
+# NTFY2=https://ntfy.sh/YourNTFY2Topic
 
 # ============================ Config ============================
 
@@ -21,7 +25,7 @@ REQUEST_TIMEOUT = 10       # seconds per HTTP request
 STALL_SECONDS = 60         # job.filePosition without changes -> print stuck
 MCU_TEMP_MAX = 80.0        # alarm if MCU temp > X
 VIN_MIN = 11.0             # alarm if VIN < X V
-LOG_INTERVAL = 5 * 60      # seconds between periodic logs
+LOG_INTERVAL = 1 * 60      # seconds between periodic logs
 LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
 CHECKED_LOG_PATH = Path(__file__).resolve().parent / "logs" / "checked_values.jsonl"
 
@@ -59,14 +63,14 @@ def _safe(d: Any, *path, default=None):
     return cur if cur is not None else default
 
 
-def notify(title: str, message: str, priority: str = "default", tags: str = "") -> None:
+def notify(title: str, message: str, priority: str = "default", tags: str = "", ntfy: str = NTFY1) -> None:
     print(f"[ALARM] {title}: {message}")
     try:
         headers = {"Title": title, "Priority": priority}
         if tags:
             headers["Tags"] = tags
         requests.post(
-            NTFY,
+            ntfy,
             data=message.encode("utf-8"),
             headers=headers,
             timeout=REQUEST_TIMEOUT,
@@ -75,10 +79,10 @@ def notify(title: str, message: str, priority: str = "default", tags: str = "") 
         print(f"[notify error] {e}")
 
 
-def get_model() -> Optional[dict]:
+def get_model(printer_ip: str) -> Optional[dict]:
     try:
         r = requests.get(
-            f"{PRINTER_IP}/rr_model",
+            f"{printer_ip}/rr_model",
             params={"flags": "d99fno"},
             timeout=REQUEST_TIMEOUT,
         )
@@ -89,10 +93,10 @@ def get_model() -> Optional[dict]:
         return None
 
 
-def get_reply() -> str:
+def get_reply(printer_ip: str) -> str:
     # Get the next pending reply from the firmware (M118, errors, warnings)
     try:
-        r = requests.get(f"{PRINTER_IP}/rr_reply", timeout=REQUEST_TIMEOUT)
+        r = requests.get(f"{printer_ip}/rr_reply", timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         return r.text.strip()
     except Exception:
@@ -300,56 +304,73 @@ def derive_cause(m: dict) -> str:
     return "; ".join(reasons) if reasons else "unknown"
 
 
-def log_om_snapshot(m: dict) -> None:
+def log_om_snapshot(m: dict, printer_ip: str) -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": time.time(), "model": m}
     with LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
 
-def log_checked_snapshot() -> None:
-    now = time.monotonic()
+def log_checked_snapshot(m: dict, printer_ip: str) -> None:
     row = {
         "ts": time.time(),
-        "status": prev["status"],
-        "filament": dict(prev["filament"]),
-        "heaters": dict(prev["heaters"]),
-        "analog": dict(prev["analog"]),
-        "file_position": prev["file_position"],
-        "seconds_since_file_position_change": round(
-            now - prev["file_position_changed_at"], 1
-        ),
+        "status": _safe(m, "state", "status"),
+        "filament": {
+            i: fm.get("status")
+            for i, fm in enumerate(_safe(m, "sensors", "filamentMonitors", default=[]) or [])
+            if isinstance(fm, dict)
+        },
+        "heaters": {
+            i: h.get("state")
+            for i, h in enumerate(_safe(m, "heat", "heaters", default=[]) or [])
+            if isinstance(h, dict)
+        },
+        "analog": {
+            i: s.get("state")
+            for i, s in enumerate(_safe(m, "sensors", "analog", default=[]) or [])
+            if isinstance(s, dict)
+        },
+        "file_position": _safe(m, "job", "filePosition"),
+        "seconds_since_file_position_change": round(time.monotonic() - prev["file_position_changed_at"], 1),
         "stalled_alerted": prev["stalled_alerted"],
         "low_vin_alerted": prev["low_vin_alerted"],
         "mcu_hot_alerted": prev["mcu_hot_alerted"],
     }
     CHECKED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CHECKED_LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
+def check_printer(m: dict, last_log_at: float, printer_ip: str) -> bool:
+    status = check_state(m)
+    check_filament(m)
+    check_heaters(m)
+    check_analog_sensors(m)
+    check_stall(m)
+    check_board(m)
+    now = time.monotonic()
+    print(f"[{printer_ip}] status={status}")
+    if now - last_log_at >= LOG_INTERVAL:
+        log_om_snapshot(m, printer_ip)
+        log_checked_snapshot(m, printer_ip)
+        print(f"[{printer_ip}] [log] OM snapshot -> {LOG_PATH}")
+        print(f"[{printer_ip}] [log] checked values -> {CHECKED_LOG_PATH}")
+        return True
+    return False
 
 # ============================ Main loop ============================
 def main() -> None:
-    print(f"Starting Duet alarm monitor against {PRINTER_IP}")
-    last_log_at = 0.0
+    print(f"Starting Duet alarm monitor against {PRINTER1_IP} and {PRINTER2_IP}")
+    last_log_at = time.monotonic()
     while True:
-        m = get_model()
-        if m is not None:
-            status = check_state(m)
-            check_filament(m)
-            check_heaters(m)
-            check_analog_sensors(m)
-            check_stall(m)
-            check_board(m)
-            now = time.monotonic()
-            if now - last_log_at >= LOG_INTERVAL:
-                log_om_snapshot(m)
-                log_checked_snapshot()
-                last_log_at = now
-                print(f"[log] OM snapshot -> {LOG_PATH}")
-                print(f"[log] checked values -> {CHECKED_LOG_PATH}")
-            t = _safe(m, "state", "time")
-            print(f"[{t}] status={status}")
+        m1 = get_model(PRINTER1_IP)
+        m2 = get_model(PRINTER2_IP)
+        logged = False
+        if m1 is not None:
+            logged = check_printer(m1, last_log_at, PRINTER1_IP) or logged
+        if m2 is not None:
+            logged = check_printer(m2, last_log_at, PRINTER2_IP) or logged
+        if logged:
+            last_log_at = time.monotonic()
         time.sleep(POLL_INTERVAL)
 
 
