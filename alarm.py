@@ -28,6 +28,7 @@ VIN_MIN = 11.0             # alarm if VIN < X V
 LOG_INTERVAL = 1 * 60      # seconds between periodic logs
 LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
 CHECKED_LOG_PATH = Path(__file__).resolve().parent / "logs" / "checked_values.jsonl"
+FINISH_LOG_PATH = Path(__file__).resolve().parent / "logs" / "finish_snapshot.jsonl"
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -78,8 +79,25 @@ def notify(title: str, message: str, priority: str = "default", tags: str = "", 
     except Exception as e:
         print(f"[notify error] {e}")
 
+def get_model_key(printer_ip: str, key: str) -> Any:
+    try:
+        r = requests.get(
+            f"{printer_ip}/rr_model",
+            params={"key": key},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("result")
+    except Exception as e:
+        print(f"[get_model_key error] {key}: {e}")
+        return None
 
 def get_model(printer_ip: str) -> Optional[dict]:
+    # Flag d99fno:
+    # d99: max tree depth = 99 levels
+    # f: only values that change frequently
+    # n: includes null values
+    # o: includes obsolete fields
     try:
         r = requests.get(
             f"{printer_ip}/rr_model",
@@ -115,6 +133,9 @@ def _default_prev() -> dict:
         "stalled_alerted": False,
         "low_vin_alerted": False,
         "mcu_hot_alerted": False,
+        "job_seq": None,
+        "last_duration": None,
+        "file_name": None,
     }
 
 
@@ -294,6 +315,51 @@ def check_board(m: dict, printer_ip: str, ntfy: str) -> None:
             elif mcu < MCU_TEMP_MAX - 5:
                 prev["mcu_hot_alerted"] = False
 
+def sync_job_static_fields(m: dict, printer_ip: str, ntfy: str) -> None:
+    # seqs.job increments when non-live job fields change (new file, print finished, etc.)
+    # job.lastDuration is null while a job runs and becomes a float when it completes
+    prev = _prev(printer_ip)
+    job_seq = _safe(m, "seqs", "job")
+    if job_seq is None or job_seq == prev["job_seq"]:
+        return
+
+    last_seq = prev["job_seq"]
+    prev["job_seq"] = job_seq
+
+    file_name = get_model_key(printer_ip, "job.file.fileName")
+    if isinstance(file_name, str):
+        prev["file_name"] = file_name
+
+    raw_duration = get_model_key(printer_ip, "job.lastDuration")
+    old_duration = prev["last_duration"]
+    if isinstance(raw_duration, (int, float)):
+        new_duration = float(raw_duration)
+        prev["last_duration"] = new_duration
+        if last_seq is not None and new_duration != old_duration:
+            check_job_finished(m, printer_ip, ntfy, new_duration, prev.get("file_name"))
+
+    else:
+        prev["last_duration"] = None
+
+
+
+def check_job_finished(
+    m: dict,
+    printer_ip: str,
+    ntfy: str,
+    last_duration: float,
+    file_name: Optional[str],
+) -> None:
+    name_part = f" file={file_name}" if file_name else ""
+    notify(
+        "Print Finished",
+        f"Duration={last_duration}s{name_part}",
+        priority="high",
+        tags="hourglass,success",
+        ntfy=ntfy,
+    )
+    log_om_snapshot(m, printer_ip)
+    log_finish_snapshot(m, printer_ip, last_duration, file_name)
 
 def derive_cause(m: dict, printer_ip: str) -> str:
     # Cross filament + heaters + sensors + autopause + reply to infer the cause
@@ -335,6 +401,36 @@ def log_om_snapshot(m: dict, printer_ip: str) -> None:
     with LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
+def log_finish_snapshot(
+    m: dict,
+    printer_ip: str,
+    last_duration: float,
+    file_name: Optional[str] = None,
+) -> None:
+    row = {
+        "ts": time.time(),
+        "printer_ip": printer_ip,
+        "duration": last_duration,
+        "file_name": file_name,
+        "paused_duration": {
+            i: fm.get("duration")
+            for i, fm in enumerate(_safe(m, "job", "pauseDuration", default=[]) or [])
+            if isinstance(fm, dict)
+        },
+        "warmup_duration": {
+            i: fm.get("duration")
+            for i, fm in enumerate(_safe(m, "job", "warmUpDuration", default=[]) or [])
+            if isinstance(fm, dict)
+        },
+        "filament_usage": {
+            i: fm.get("usage")
+            for i, fm in enumerate(_safe(m, "job", "rawExtrusion", default=[]) or [])
+            if isinstance(fm, dict)
+        }
+    }
+    FINISH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with FINISH_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
 def log_checked_snapshot(m: dict, printer_ip: str) -> None:
     prev = _prev(printer_ip)
@@ -367,6 +463,7 @@ def log_checked_snapshot(m: dict, printer_ip: str) -> None:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
 def check_printer(m: dict, last_log_at: float, printer_ip: str, ntfy: str) -> bool:
+    sync_job_static_fields(m, printer_ip, ntfy)
     status = check_state(m, printer_ip, ntfy)
     check_filament(m, printer_ip, ntfy)
     check_heaters(m, printer_ip, ntfy)
