@@ -23,6 +23,7 @@ NTFY2 = os.getenv("NTFY2")
 # 
 TIME_LEFT_FILAMENT_ALERT = 5*60 # 5 minutes - job.timesLeft.filament
 TOTAL_FILAMENT_LENGTH = 1498000 # mm - Unused filanent (4kg)
+FILAMENT_USAGE_ALERT = 5000 # mm - Alert if filament length is less than this value
 POLL_INTERVAL = 5          # seconds between polls
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 STALL_SECONDS = 60         # job.filePosition without changes -> print stuck
@@ -138,6 +139,8 @@ def _default_prev() -> dict:
         "low_vin_alerted": False,
         "mcu_hot_alerted": False,
         "pause_duration": None,
+        "warmup_duration": None,
+        "raw_extrusion": None,
         # Static values
         "job_seq": None,
         "last_duration": None,
@@ -331,7 +334,7 @@ def check_board(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
             elif mcu < MCU_TEMP_MAX - 5:
                 prev["mcu_hot_alerted"] = False
 
-def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: str) -> None:
+def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
     # Save the last pause duration, warmup duration, and raw extrusion values
     # This is useful to get those values when the print is finished
     prev = _prev(printer_ip)
@@ -344,6 +347,16 @@ def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: 
     raw_extrusion = _safe(model_dynamic_values, "job", "rawExtrusion")
     if raw_extrusion is not None:
         prev["raw_extrusion"] = float(raw_extrusion)
+        filament_left = TOTAL_FILAMENT_LENGTH - float(raw_extrusion)
+        if filament_left < FILAMENT_USAGE_ALERT:
+            notify(
+                "Filament Low (based on job.rawExtrusion)",
+                f"Filament left: {filament_left} mm < {FILAMENT_USAGE_ALERT} mm",
+                priority="urgent",
+                tags="warning,scroll",
+                ntfy=ntfy,
+            )
+
 
 def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -> None:
     # seqs.job increments when non-live job fields change (new file, print finished, etc.)
