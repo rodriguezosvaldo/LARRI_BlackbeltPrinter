@@ -381,7 +381,12 @@ def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -
         log_finish_snapshot(printer_ip, prev["last_duration"], file_name, pause_duration, warmup_duration, raw_extrusion)
         notify(
             "Print Finished",
-            f"Duration={prev["last_duration"]}s{file_name}",
+            f"File Name={file_name}",
+            f"--------------------------------",
+            f"Duration: {prev["last_duration"]}s",
+            f"Pause Duration: {pause_duration}s", 
+            f"Warmup Duration: {warmup_duration}s", 
+            f"Raw Extrusion: {raw_extrusion}mm",
             priority="Urgent",
             tags="hourglass,success",
             ntfy=ntfy,
@@ -491,7 +496,7 @@ def check_printer(model_dynamic_values: dict, model_static_values: dict, last_lo
     check_analog_sensors(model_dynamic_values, printer_ip, ntfy)
     check_stall(model_dynamic_values, printer_ip, ntfy)
     check_board(model_dynamic_values, printer_ip, ntfy)
-    save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished
+    save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
     check_static_values(model_static_values, printer_ip, ntfy)
     now = time.monotonic()
     print(f"[{printer_ip}] status={status}")
