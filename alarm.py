@@ -1,3 +1,4 @@
+import csv
 import json
 import time
 import os
@@ -34,6 +35,7 @@ LOG_INTERVAL = 10      # seconds between periodic logs
 LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
 CHECKED_LOG_PATH = Path(__file__).resolve().parent / "logs" / "checked_values.jsonl"
 FINISH_LOG_PATH = Path(__file__).resolve().parent / "logs" / "finish_snapshot.jsonl"
+EXTRUSION_RATE_LOG_DIR = Path(__file__).resolve().parent / "logs" / "extrusion_rate"
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -187,6 +189,7 @@ def get_reply(printer_ip: str) -> str:
 def _default_prev() -> dict:
     return {
         # Dynamic values
+        "time_monotonic": time.monotonic(),
         "status": None,
         "filament": {},                # index -> last status
         "heaters": {},                 # index -> last state
@@ -196,6 +199,8 @@ def _default_prev() -> dict:
         "pause_duration": None,
         "warmup_duration": None,
         "raw_extrusion": None,
+        "extrusion_rate_log_path": None,
+        "extrusion_rate_started_at": None,
         # Static values
         "job_seq": None,
         "last_duration": None,
@@ -246,6 +251,9 @@ def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optio
             )
         elif status == "resuming":
             notify("Print Resuming", f"state {last} -> resuming", tags="arrow_forward", ntfy=ntfy)
+        elif last in (PRINTING_STATES | {"paused", "pausing"}) and status in {"idle", "off"}:
+            prev["extrusion_rate_log_path"] = None
+            prev["extrusion_rate_started_at"] = None
     prev["status"] = status
     return status
 
@@ -424,24 +432,72 @@ def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: 
     warmup_duration = _safe(model_dynamic_values, "job", "warmUpDuration")
     if warmup_duration is not None:
         prev["warmup_duration"] = float(warmup_duration)
+
+    status = _safe(model_dynamic_values, "state", "status")
+    during_print = status in (PRINTING_STATES | {"paused", "pausing"})
     raw_extrusion = _safe(model_dynamic_values, "job", "rawExtrusion")
-    if raw_extrusion is not None:
+    if not during_print or raw_extrusion is None:
+        return
+
+    file_name = _safe(model_dynamic_values, "job", "file", "fileName") or prev.get("file_name")
+    log_path = prev.get("extrusion_rate_log_path")
+    if log_path is None:
+        log_path = start_extrusion_rate_log(printer_ip, file_name)
+        prev["extrusion_rate_log_path"] = log_path
+        now = time.monotonic()
+        prev["extrusion_rate_started_at"] = now
+        prev["time_monotonic"] = now
         prev["raw_extrusion"] = float(raw_extrusion)
-        filament_rolls_used = raw_extrusion / TOTAL_FILAMENT_LENGTH
-        current_filament_roll_extruded = raw_extrusion % TOTAL_FILAMENT_LENGTH
-        current_filament_roll_left = TOTAL_FILAMENT_LENGTH - current_filament_roll_extruded
-        if current_filament_roll_left < FILAMENT_USAGE_ALERT:
-            stop_notifications(
-                printer_ip,
-                "filament_low",
-                "Filament Low",
-                f"(Based on job.rawExtrusion)\n"
-                f"SUPPOSING WE USE NEW FILAMENT ROLLS EVERY TIME A ROLL IS FINISHED\n\n"
-                f"Filament Rolls Used: {filament_rolls_used:.2f}\n"
-                f"Current Filament Roll left: {current_filament_roll_left:.0f} mm < {FILAMENT_USAGE_ALERT} mm",
-                priority="urgent",
-                tags="warning",
-                ntfy=ntfy)
+        save_extrusion_rate_csv(
+            log_path,
+            printer_ip,
+            file_name,
+            now,
+            now,
+            float(raw_extrusion),
+            0.0,
+        )
+        return
+
+    prev_time_monotonic = prev["time_monotonic"]
+    prev_raw_extrusion = prev["raw_extrusion"]
+    now = time.monotonic()
+    current_raw_extrusion = float(raw_extrusion)
+    if (
+        prev_time_monotonic is not None
+        and prev_raw_extrusion is not None
+        and now > prev_time_monotonic
+    ):
+        extrusion_rate = (current_raw_extrusion - prev_raw_extrusion) / (now - prev_time_monotonic)
+        save_extrusion_rate_csv(
+            log_path,
+            printer_ip,
+            file_name,
+            prev["extrusion_rate_started_at"],
+            now,
+            current_raw_extrusion,
+            extrusion_rate,
+        )
+
+    prev["time_monotonic"] = now
+    prev["raw_extrusion"] = current_raw_extrusion
+
+    filament_rolls_used = current_raw_extrusion / TOTAL_FILAMENT_LENGTH
+    current_filament_roll_extruded = current_raw_extrusion % TOTAL_FILAMENT_LENGTH
+    current_filament_roll_left = TOTAL_FILAMENT_LENGTH - current_filament_roll_extruded
+    if current_filament_roll_left < FILAMENT_USAGE_ALERT:
+        stop_notifications(
+            printer_ip,
+            "filament_low",
+            "Filament Low",
+            f"(Based on job.rawExtrusion)\n"
+            f"SUPPOSING WE USE NEW FILAMENT ROLLS EVERY TIME A ROLL IS FINISHED\n\n"
+            f"Filament Rolls Used: {filament_rolls_used:.2f}\n"
+            f"Current Filament Roll left: {current_filament_roll_left:.0f} mm < {FILAMENT_USAGE_ALERT} mm",
+            priority="urgent",
+            tags="warning",
+            ntfy=ntfy,
+        )
     
 
 def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -> None:
@@ -455,6 +511,8 @@ def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -
     prev["job_seq"] = seqs
     
     file_name = _safe(model_static_values, "job", "file", "fileName")
+    if file_name is not None:
+        prev["file_name"] = file_name
     last_duration = _safe(model_static_values, "job", "lastDuration")
 
     if last_duration is not None:
@@ -464,6 +522,8 @@ def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -
         raw_extrusion = prev["raw_extrusion"]
 
         log_finish_snapshot(printer_ip, prev["last_duration"], file_name, pause_duration, warmup_duration, raw_extrusion)
+        prev["extrusion_rate_log_path"] = None
+        prev["extrusion_rate_started_at"] = None
         notify(
             "Print Finished",
             f"File Name => {file_name}\n"
@@ -509,6 +569,53 @@ def derive_cause(model_dynamic_values: dict, printer_ip: str) -> str:
         reasons.append(f"reply='{reply[:200]}'")
 
     return "; ".join(reasons) if reasons else "unknown"
+
+def _printer_slug(printer_ip: str) -> str:
+    return printer_ip.rstrip("/").split("/")[-1] or "printer"
+
+def _safe_filename(name: str) -> str:
+    for ch in '<>:"/\\|?*':
+        name = name.replace(ch, "_")
+    return name.strip() or "unknown"
+
+def start_extrusion_rate_log(printer_ip: str, file_name: Optional[str]) -> Path:
+    EXTRUSION_RATE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = _safe_filename(file_name or "unknown")
+    return EXTRUSION_RATE_LOG_DIR / f"{_printer_slug(printer_ip)}_{ts}_{safe_name}.csv"
+
+EXTRUSION_RATE_CSV_FIELDS = (
+    "date_time",
+    "printer_ip",
+    "file_name",
+    "elapsed_s",
+    "raw_extrusion",
+    "extrusion_rate",
+)
+
+def save_extrusion_rate_csv(
+    log_path: Path,
+    printer_ip: str,
+    file_name: Optional[str],
+    started_at: float,
+    now: float,
+    current_raw_extrusion: float,
+    extrusion_rate: float,
+) -> None:
+    row = {
+        "date_time": datetime.now().isoformat(timespec="seconds"),
+        "printer_ip": printer_ip,
+        "file_name": file_name or "",
+        "elapsed_s": round(now - started_at, 1),
+        "raw_extrusion": current_raw_extrusion,
+        "extrusion_rate": round(extrusion_rate, 2),
+    }
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    with log_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=EXTRUSION_RATE_CSV_FIELDS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
 
 def log_om_snapshot(model_dynamic_values: dict, printer_ip: str) -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -573,6 +680,7 @@ def log_checked_snapshot(model_dynamic_values: dict, printer_ip: str) -> None:
 
 def check_printer(model_dynamic_values: dict, model_static_values: dict, last_log_at: float, printer_ip: str, ntfy: str) -> bool:
     # Checking dynamic values
+    now = time.monotonic()
     status = check_state(model_dynamic_values, printer_ip, ntfy)
     check_filament(model_dynamic_values, printer_ip, ntfy)
     check_heaters(model_dynamic_values, printer_ip, ntfy)
@@ -581,7 +689,6 @@ def check_printer(model_dynamic_values: dict, model_static_values: dict, last_lo
     check_board(model_dynamic_values, printer_ip, ntfy)
     save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip, ntfy) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
     check_static_values(model_static_values, printer_ip, ntfy)
-    now = time.monotonic()
     print(f"[{printer_ip}] status={status}")
     if now - last_log_at >= LOG_INTERVAL:
         log_om_snapshot(model_dynamic_values, printer_ip)
