@@ -496,7 +496,7 @@ def check_printer(model_dynamic_values: dict, model_static_values: dict, last_lo
     check_analog_sensors(model_dynamic_values, printer_ip, ntfy)
     check_stall(model_dynamic_values, printer_ip, ntfy)
     check_board(model_dynamic_values, printer_ip, ntfy)
-    save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
+    save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip, ntfy) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
     check_static_values(model_static_values, printer_ip, ntfy)
     now = time.monotonic()
     print(f"[{printer_ip}] status={status}")
