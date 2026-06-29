@@ -1,5 +1,6 @@
 import csv
 import json
+import threading
 import time
 import os
 from pathlib import Path
@@ -27,15 +28,14 @@ TOTAL_FILAMENT_LENGTH = 1498000 # mm - Unused filanent (4kg)
 FILAMENT_USAGE_ALERT = 10000 # mm - Alert if filament length is less than this value
 POLL_INTERVAL = 5          # seconds between polls
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
+REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
 STALL_SECONDS = 60         # job.filePosition without changes -> print stuck
 MCU_TEMP_MAX = 80.0        # alarm if MCU temp > X
 VIN_MIN = 11.0             # alarm if VIN < X V
 MAX_PROBLEM_NOTIFICATIONS = 2  # normal alerts before the final "no more" message
 LOG_INTERVAL = 10      # seconds between periodic logs
-LOG_PATH = Path(__file__).resolve().parent / "logs" / "om_snapshots.jsonl"
-CHECKED_LOG_PATH = Path(__file__).resolve().parent / "logs" / "checked_values.jsonl"
-FINISH_LOG_PATH = Path(__file__).resolve().parent / "logs" / "finish_snapshot.jsonl"
-EXTRUSION_RATE_LOG_DIR = Path(__file__).resolve().parent / "logs" / "extrusion_rate"
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+EXTRUSION_RATE_LOG_DIR = LOG_DIR / "extrusion_rate"
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -156,7 +156,7 @@ def get_model_static_values(printer_ip: str) -> Optional[dict]:
         print(f"[get_model_static_values error] {e}")
         return None
 
-def get_model(printer_ip: str) -> Optional[dict]:
+def get_model_dynamic_values(printer_ip: str) -> Optional[dict]:
     # Flag d99fno:
     # d99: max tree depth = 99 levels
     # f: only values that change frequently
@@ -171,9 +171,21 @@ def get_model(printer_ip: str) -> Optional[dict]:
         r.raise_for_status()
         return r.json().get("result")
     except Exception as e:
-        print(f"[get_model error] {e}")
+        print(f"[get_model_dynamic_values error] {e}")
         return None
 
+def get_seqs_reply(printer_ip: str) -> dict:
+    try:
+        r = requests.get(
+            f"{printer_ip}/rr_model",
+            params={"key": "seqs.reply", "flags": "d99n"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("result")
+    except Exception as e:
+        print(f"[get_seqs.reply error] {printer_ip}: {e}")
+        return None
 
 def get_reply(printer_ip: str) -> str:
     # Get the next pending reply from the firmware (M118, errors, warnings)
@@ -203,6 +215,7 @@ def _default_prev() -> dict:
         "extrusion_rate_started_at": None,
         # Static values
         "job_seq": None,
+        "seqs_reply": None,
         "last_duration": None,
         "file_name": None,
     }
@@ -218,6 +231,21 @@ def _prev(printer_ip: str) -> dict:
 
 
 # ============================ Checks ============================
+def check_printer(model_dynamic_values: dict, model_static_values: dict, last_log_at: float, printer_ip: str, ntfy: str) -> bool:
+    # Checking dynamic values
+    now = time.monotonic()
+    status = check_state(model_dynamic_values, printer_ip, ntfy)
+    check_filament(model_dynamic_values, printer_ip, ntfy)
+    check_stall(model_dynamic_values, printer_ip, ntfy)
+    check_save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip, ntfy) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
+    check_static_values(model_static_values, printer_ip, ntfy)
+    print(f"[{printer_ip}] status={status}")
+    if now - last_log_at >= LOG_INTERVAL:
+        log_om_snapshot(model_dynamic_values, printer_ip)
+        log_checked_snapshot(model_dynamic_values, printer_ip)
+        return True
+    return False
+
 def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optional[str]:
     # state.status: main indicator of pause/stop/halt
     prev = _prev(printer_ip)
@@ -257,6 +285,21 @@ def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optio
     prev["status"] = status
     return status
 
+def check_reply(printer_ip: str, ntfy: str) -> None:
+    prev = _prev(printer_ip)
+    seqs_reply = get_seqs_reply(printer_ip)
+    if seqs_reply is not None:
+        if seqs_reply != prev["seqs_reply"] and prev["seqs_reply"] is not None:
+            reply = get_reply(printer_ip)
+            if reply:
+                notify(
+                    "Possible Problem (M118, errors, warnings)",
+                    f"Reply: {reply}",
+                    tags="warning",
+                    ntfy=ntfy,
+                )
+        prev["seqs_reply"] = seqs_reply
+        print(f"[seqs.reply] {printer_ip}: {seqs_reply}")
 
 def check_filament(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
     prev = _prev(printer_ip)
@@ -301,59 +344,6 @@ def check_filament(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> No
                 notify("Filament OK", f"Filament monitor #{i} recovered", tags="white_check_mark", ntfy=ntfy)
         prev["filament"][i] = s or "unknown"
 
-
-def check_heaters(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
-    # heat.heaters[n].state: fault or offline
-    prev = _prev(printer_ip)
-    heaters = _safe(model_dynamic_values, "heat", "heaters", default=[]) or []
-    for i, h in enumerate(heaters):
-        if not isinstance(h, dict):
-            continue
-        st = h.get("state")
-        last = prev["heaters"].get(i)
-        key = f"heater_fault_{i}"
-        if st in HEATER_FAULT_STATES:
-            cur = h.get("current")
-            act = h.get("active")
-            stop_notifications(
-                printer_ip,
-                key,
-                "Heater Fault",
-                f"Heater #{i} state={st} current={cur} setpoint={act}",
-                priority="urgent",
-                tags="fire,rotating_light",
-                ntfy=ntfy,
-            )
-        else:
-            clear_problem_notification(printer_ip, key)
-        prev["heaters"][i] = st
-
-
-def check_analog_sensors(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
-    # sensors.analog[n].state: openCircuit, shortCircuit, timeout, hardwareError, etc
-    prev = _prev(printer_ip)
-    sensors = _safe(model_dynamic_values, "sensors", "analog", default=[]) or []
-    for i, s in enumerate(sensors):
-        if not isinstance(s, dict):
-            continue
-        st = s.get("state")
-        last = prev["analog"].get(i)
-        key = f"analog_fault_{i}"
-        if st and st != "ok":
-            stop_notifications(
-                printer_ip,
-                key,
-                "Temperature Sensor Fault",
-                f"Analog sensor #{i} ({s.get('name', '?')}) state: {st}",
-                priority="urgent",
-                tags="thermometer,warning",
-                ntfy=ntfy,
-            )
-        else:
-            clear_problem_notification(printer_ip, key)
-        prev["analog"][i] = st
-
-
 def check_stall(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
     # job.filePosition + move.currentMove: detect print stuck
     prev = _prev(printer_ip)
@@ -383,46 +373,7 @@ def check_stall(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
         prev["file_position_changed_at"] = now
         clear_problem_notification(printer_ip, "print_stalled")
 
-
-def check_board(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
-    # boards[0].vIn.current and boards[0].mcuTemp.current
-    prev = _prev(printer_ip)
-    boards = _safe(model_dynamic_values, "boards", default=[]) or []
-    for i, b in enumerate(boards):
-        if not isinstance(b, dict):
-            continue
-        vin = _safe(b, "vIn", "current")
-        key_vin = f"low_vin_{i}"
-        if isinstance(vin, (int, float)):
-            if vin < VIN_MIN:
-                stop_notifications(
-                    printer_ip,
-                    key_vin,
-                    "Low VIN",
-                    f"Board #{i} VIN={vin:.2f}V (< {VIN_MIN}V)",
-                    priority="urgent",
-                    tags="electric_plug,warning",
-                    ntfy=ntfy,
-                )
-            else:
-                clear_problem_notification(printer_ip, key_vin)
-        mcu = _safe(b, "mcuTemp", "current")
-        key_mcu = f"mcu_overheat_{i}"
-        if isinstance(mcu, (int, float)):
-            if mcu > MCU_TEMP_MAX:
-                stop_notifications(
-                    printer_ip,
-                    key_mcu,
-                    "MCU Overheat",
-                    f"Board #{i} MCU={mcu:.1f}C (> {MCU_TEMP_MAX}C)",
-                    priority="urgent",
-                    tags="fire,warning",
-                    ntfy=ntfy,
-                )
-            else:
-                clear_problem_notification(printer_ip, key_mcu)
-
-def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
+def check_save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
     # Save the last pause duration, warmup duration, and raw extrusion values
     # This is useful to get those values when the print is finished
     prev = _prev(printer_ip)
@@ -499,7 +450,6 @@ def save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printer_ip: 
             ntfy=ntfy,
         )
     
-
 def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -> None:
     # seqs.job increments when non-live job fields change (new file, print finished, etc.)
     # job.lastDuration is null while a job runs and becomes a float when it completes
@@ -542,27 +492,27 @@ def derive_cause(model_dynamic_values: dict, printer_ip: str) -> str:
     reasons = []
 
     for i, fm in enumerate(_safe(model_dynamic_values, "sensors", "filamentMonitors", default=[]) or []):
-        s = (fm or {}).get("status")
-        if s and s != "ok":
-            reasons.append(f"filament[{i}]={s}")
+        filament_monitor_status = (fm or {}).get("status")
+        if filament_monitor_status and filament_monitor_status != "ok":
+            reasons.append(f"filament[{i}]={filament_monitor_status}")
 
     for i, h in enumerate(_safe(model_dynamic_values, "heat", "heaters", default=[]) or []):
-        st = (h or {}).get("state")
-        if st in HEATER_FAULT_STATES:
-            reasons.append(f"heater[{i}]={st}")
+        heater_state = (h or {}).get("state")
+        if heater_state in HEATER_FAULT_STATES:
+            reasons.append(f"heater[{i}]={heater_state}")
 
     for i, s in enumerate(_safe(model_dynamic_values, "sensors", "analog", default=[]) or []):
-        st = (s or {}).get("state")
-        if st and st != "ok":
-            reasons.append(f"analog[{i}]={st}")
+        analog_sensor_state = (s or {}).get("state")
+        if analog_sensor_state and analog_sensor_state != "ok":
+            reasons.append(f"analog[{i}]={analog_sensor_state}")
 
     for inp in _safe(model_dynamic_values, "inputs", default=[]) or []:
         if not isinstance(inp, dict):
             continue
         name = (inp.get("name") or "").lower()
-        st = inp.get("state")
-        if name == "autopause" and st not in (None, "idle"):
-            reasons.append(f"autopause={st}")
+        input_state = inp.get("state")
+        if name == "autopause" and input_state not in (None, "idle"):
+            reasons.append(f"autopause={input_state}")
 
     reply = get_reply(printer_ip)
     if reply:
@@ -570,8 +520,18 @@ def derive_cause(model_dynamic_values: dict, printer_ip: str) -> str:
 
     return "; ".join(reasons) if reasons else "unknown"
 
+# ============================ Loggings ============================
 def _printer_slug(printer_ip: str) -> str:
     return printer_ip.rstrip("/").split("/")[-1] or "printer"
+
+def _om_log_path(printer_ip: str) -> Path:
+    return LOG_DIR / f"om_snapshots_{_printer_slug(printer_ip)}.jsonl"
+
+def _checked_log_path(printer_ip: str) -> Path:
+    return LOG_DIR / f"checked_values_{_printer_slug(printer_ip)}.jsonl"
+
+def _finish_log_path(printer_ip: str) -> Path:
+    return LOG_DIR / f"finish_snapshot_{_printer_slug(printer_ip)}.jsonl"
 
 def _safe_filename(name: str) -> str:
     for ch in '<>:"/\\|?*':
@@ -618,13 +578,14 @@ def save_extrusion_rate_csv(
         writer.writerow(row)
 
 def log_om_snapshot(model_dynamic_values: dict, printer_ip: str) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_path = _om_log_path(printer_ip)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "date_time": datetime.now().isoformat(timespec="seconds"),
         "ts": time.time(),
         "model": model_dynamic_values,
     }
-    with LOG_PATH.open("a", encoding="utf-8") as f:
+    with log_path.open("a", encoding="utf-8") as f:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
 def log_finish_snapshot(
@@ -645,8 +606,9 @@ def log_finish_snapshot(
         "warmup_duration": warmup_duration,
         "filament_usage": raw_extrusion,
     }
-    FINISH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with FINISH_LOG_PATH.open("a", encoding="utf-8") as f:
+    log_path = _finish_log_path(printer_ip)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
 
 def log_checked_snapshot(model_dynamic_values: dict, printer_ip: str) -> None:
@@ -671,55 +633,52 @@ def log_checked_snapshot(model_dynamic_values: dict, printer_ip: str) -> None:
             if isinstance(s, dict)
         },
         "file_position": _safe(model_dynamic_values, "job", "filePosition"),
-        "seconds_since_file_position_change": round(time.monotonic() - prev["file_position_changed_at"], 1),
-        "problem_notifications": dict(_problem_notifications(printer_ip)),
     }
-    CHECKED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with CHECKED_LOG_PATH.open("a", encoding="utf-8") as f:
+    log_path = _checked_log_path(printer_ip)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
         f.write(f"[{printer_ip}] {json.dumps(row, ensure_ascii=False)}\n")
-
-def check_printer(model_dynamic_values: dict, model_static_values: dict, last_log_at: float, printer_ip: str, ntfy: str) -> bool:
-    # Checking dynamic values
-    now = time.monotonic()
-    status = check_state(model_dynamic_values, printer_ip, ntfy)
-    check_filament(model_dynamic_values, printer_ip, ntfy)
-    check_heaters(model_dynamic_values, printer_ip, ntfy)
-    check_analog_sensors(model_dynamic_values, printer_ip, ntfy)
-    check_stall(model_dynamic_values, printer_ip, ntfy)
-    check_board(model_dynamic_values, printer_ip, ntfy)
-    save_last_pause_warmup_rawExtrusion(model_dynamic_values, printer_ip, ntfy) # To get the last pause duration, warmup duration, and raw extrusion values when the print is finished. Also, alert if the filament left is less than FILAMENT_USAGE_ALERT
-    check_static_values(model_static_values, printer_ip, ntfy)
-    print(f"[{printer_ip}] status={status}")
-    if now - last_log_at >= LOG_INTERVAL:
-        log_om_snapshot(model_dynamic_values, printer_ip)
-        log_checked_snapshot(model_dynamic_values, printer_ip)
-        return True
-    return False
 
 # ============================ Main loop ============================
 def main() -> None:
     print(f"Starting Duet alarm monitor against {PRINTER1_IP} and {PRINTER2_IP}")
     notify(
-        "Starting Duet alarm monitor",
-        f"Starting Duet alarm monitor against {PRINTER1_IP} and {PRINTER2_IP}",
+        "Starting Duet alarm monitor against:",
+        f"{PRINTER1_IP}\n{PRINTER2_IP}",
         priority="default",
         tags="info",
         ntfy=NTFY1,
     )
-    last_log_at = time.monotonic()
-    while True:
-        model_dynamic_values1 = get_model(PRINTER1_IP)
-        model_static_values1 = get_model_static_values(PRINTER1_IP)
-        model_dynamic_values2 = get_model(PRINTER2_IP)
-        model_static_values2 = get_model_static_values(PRINTER2_IP)
-        logged = False
-        if model_dynamic_values1 is not None:
-            logged = check_printer(model_dynamic_values1, model_static_values1, last_log_at, PRINTER1_IP, NTFY1) or logged
-        if model_dynamic_values2 is not None:
-            logged = check_printer(model_dynamic_values2, model_static_values2, last_log_at, PRINTER2_IP, NTFY2) or logged
-        if logged:
-            last_log_at = time.monotonic()
-        time.sleep(POLL_INTERVAL)
+    now = time.monotonic()
+    last_log_at = {PRINTER1_IP: now, PRINTER2_IP: now}
+
+    def loop_check_seqs_reply() -> None:
+        while True:
+            check_reply(PRINTER1_IP, NTFY1)
+            check_reply(PRINTER2_IP, NTFY2)
+            time.sleep(REQUEST_REPLY)
+
+    def loop_check_object_model() -> None:
+        while True:
+            model_dynamic_values1 = get_model_dynamic_values(PRINTER1_IP)
+            model_static_values1 = get_model_static_values(PRINTER1_IP)
+
+            model_dynamic_values2 = get_model_dynamic_values(PRINTER2_IP)
+            model_static_values2 = get_model_static_values(PRINTER2_IP)
+
+            if model_dynamic_values1 is not None:
+                if check_printer(model_dynamic_values1, model_static_values1, last_log_at[PRINTER1_IP], PRINTER1_IP, NTFY1):
+                    last_log_at[PRINTER1_IP] = time.monotonic()
+            if model_dynamic_values2 is not None:
+                if check_printer(model_dynamic_values2, model_static_values2, last_log_at[PRINTER2_IP], PRINTER2_IP, NTFY2):
+                    last_log_at[PRINTER2_IP] = time.monotonic()
+            time.sleep(POLL_INTERVAL)
+
+    seqs_thread = threading.Thread(target=loop_check_seqs_reply, name="seqs-reply")
+    model_thread = threading.Thread(target=loop_check_object_model, name="object-model")
+    seqs_thread.start()
+    model_thread.start()
+    seqs_thread.join()
 
 
 if __name__ == "__main__":
