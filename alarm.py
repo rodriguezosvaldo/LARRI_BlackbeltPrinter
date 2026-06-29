@@ -699,6 +699,13 @@ def check_printer(model_dynamic_values: dict, model_static_values: dict, last_lo
 # ============================ Main loop ============================
 def main() -> None:
     print(f"Starting Duet alarm monitor against {PRINTER1_IP} and {PRINTER2_IP}")
+    notify(
+        "Starting Duet alarm monitor",
+        f"Starting Duet alarm monitor against {PRINTER1_IP} and {PRINTER2_IP}",
+        priority="default",
+        tags="info",
+        ntfy=NTFY1,
+    )
     last_log_at = time.monotonic()
     while True:
         model_dynamic_values1 = get_model(PRINTER1_IP)
