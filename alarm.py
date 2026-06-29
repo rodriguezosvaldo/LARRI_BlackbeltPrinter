@@ -299,7 +299,6 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
                     ntfy=ntfy,
                 )
         prev["seqs_reply"] = seqs_reply
-        print(f"[seqs.reply] {printer_ip}: {seqs_reply}")
 
 def check_filament(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
     prev = _prev(printer_ip)
