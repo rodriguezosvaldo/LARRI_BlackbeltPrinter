@@ -276,6 +276,7 @@ def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optio
         elif status == "halted":
             notify(
                 "Printer Halted",
+                f"{_printer_slug(printer_ip)}\n"
                 f"state {last} -> halted (emergency stop). Cause: {derive_cause(model_dynamic_values, printer_ip)}",
                 priority="urgent",
                 tags="rotating_light",
@@ -299,7 +300,8 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
             if reply:
                 notify(
                     "New M118 Message",
-                    f"Reply: {reply}",
+                    f"{_printer_slug(printer_ip)}\n"
+                    f"Message: {reply}",
                     tags="warning",
                     ntfy=ntfy,
                 )
@@ -321,6 +323,7 @@ def check_filament(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> No
             printer_ip,
             key_time,
             "Filament Low (based on job.timesLeft.filament)",
+            f"{_printer_slug(printer_ip)}\n"
             f"Filament out in {time_left_filament} seconds",
             priority="urgent",
             tags="warning,scroll",
@@ -372,6 +375,7 @@ def check_stall(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
                 printer_ip,
                 "print_stalled",
                 "Print Stalled",
+                f"{_printer_slug(printer_ip)}\n"
                 f"filePosition={pos} no changes for {STALL_SECONDS}s "
                 f"(status={status}, requestedSpeed={req_speed}, extrusionRate={ext_rate})",
                 priority="urgent",
@@ -451,6 +455,7 @@ def check_save_last_pause_warmup_rawExtrusion(model_dynamic_values: dict, printe
             printer_ip,
             "filament_low",
             "Filament Low",
+            f"{_printer_slug(printer_ip)}\n"
             f"(Based on job.rawExtrusion)\n"
             f"SUPPOSING WE USE NEW FILAMENT ROLLS EVERY TIME A ROLL IS FINISHED\n\n"
             f"Filament Rolls Used: {filament_rolls_used:.2f}\n"
@@ -486,6 +491,7 @@ def check_static_values(model_static_values: dict, printer_ip: str, ntfy: str) -
         prev["extrusion_rate_started_at"] = None
         notify(
             "Print Finished",
+            f"{_printer_slug(printer_ip)}\n"
             f"File Name => {file_name}\n"
             f"--------------------------------\n"
             f"Duration: {prev["last_duration"]}s\n"
