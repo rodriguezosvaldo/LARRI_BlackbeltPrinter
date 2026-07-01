@@ -36,6 +36,9 @@ MAX_PROBLEM_NOTIFICATIONS = 2  # normal alerts before the final "no more" messag
 LOG_INTERVAL = 10      # seconds between periodic logs
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 EXTRUSION_RATE_LOG_DIR = LOG_DIR / "extrusion_rate"
+START_END_PRINTING_LOG_DIR = LOG_DIR / "start_end_printing"
+MESSAGE_START_PRINTING = "selected for printing"
+MESSAGE_END_PRINTING = "printing finished" # This value is not checked in real reply
 
 # ===================== Sets of the Object Model =====================
 # See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
@@ -254,21 +257,22 @@ def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optio
     if status != last and last is not None:
         if last in PRINTING_STATES and status in STOPPED_STATES:
             cause = derive_cause(model_dynamic_values, printer_ip)
-            notify(
-                "Print Stopped",
-                f"state {last} -> {status}. Possible cause: {cause}",
-                priority="urgent",
-                tags="octagonal_sign,warning",
-                ntfy=ntfy,
-            )
+            # notify(
+            #     "Print Stopped",
+            #     f"state {last} -> {status}. Possible cause: {cause}",
+            #     priority="urgent",
+            #     tags="octagonal_sign,warning",
+            #     ntfy=ntfy,
+            # )
         elif status == "paused" and last not in {"pausing", "paused"}:
-            notify(
-                "Print Paused",
-                f"state {last} -> paused. Cause: {derive_cause(model_dynamic_values, printer_ip)}",
-                priority="high",
-                tags="pause_button",
-                ntfy=ntfy,
-            )
+            print(f"Print Paused: {last} -> paused")
+            # notify(
+            #     "Print Paused",
+            #     f"state {last} -> paused. Cause: {derive_cause(model_dynamic_values, printer_ip)}",
+            #     priority="high",
+            #     tags="pause_button",
+            #     ntfy=ntfy,
+            # )
         elif status == "halted":
             notify(
                 "Printer Halted",
@@ -278,7 +282,8 @@ def check_state(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> Optio
                 ntfy=ntfy,
             )
         elif status == "resuming":
-            notify("Print Resuming", f"state {last} -> resuming", tags="arrow_forward", ntfy=ntfy)
+            print(f"Print Resuming: {last} -> resuming")
+            # notify("Print Resuming", f"state {last} -> resuming", tags="arrow_forward", ntfy=ntfy)
         elif last in (PRINTING_STATES | {"paused", "pausing"}) and status in {"idle", "off"}:
             prev["extrusion_rate_log_path"] = None
             prev["extrusion_rate_started_at"] = None
@@ -293,11 +298,17 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
             reply = get_reply(printer_ip)
             if reply:
                 notify(
-                    "Possible Problem (M118, errors, warnings)",
+                    "New M118 Message",
                     f"Reply: {reply}",
                     tags="warning",
                     ntfy=ntfy,
                 )
+            if MESSAGE_START_PRINTING in reply:
+                start_or_end = "Start Printing"
+                start_end_printing_log(printer_ip, start_or_end, reply)
+            elif MESSAGE_END_PRINTING in reply:
+                start_or_end = "End Printing"
+                start_end_printing_log(printer_ip, start_or_end, reply)
         prev["seqs_reply"] = seqs_reply
 
 def check_filament(model_dynamic_values: dict, printer_ip: str, ntfy: str) -> None:
@@ -520,6 +531,14 @@ def derive_cause(model_dynamic_values: dict, printer_ip: str) -> str:
     return "; ".join(reasons) if reasons else "unknown"
 
 # ============================ Loggings ============================
+def start_end_printing_log(printer_ip: str, start_or_end: str, reply: Optional[str]) -> None:
+    START_END_PRINTING_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    date_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = START_END_PRINTING_LOG_DIR / f"{_printer_slug(printer_ip)}.jsonl"
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"[{date_time}] {start_or_end}: {reply}\n")
+
+
 def _printer_slug(printer_ip: str) -> str:
     return printer_ip.rstrip("/").split("/")[-1] or "printer"
 
