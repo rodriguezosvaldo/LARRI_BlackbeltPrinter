@@ -51,6 +51,8 @@ ui_state = {
 }
 
 REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
+REQUEST_TEN_SECONDS = 10   # check every 10 seconds
+
 MESSAGE_START_PRINTING = "selected for printing"
 MESSAGE_END_PRINTING = "printing finished" # This value is not checked in real reply
 
@@ -212,9 +214,12 @@ def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: flo
     print(f"{_printer_slug(printer_ip)}_raw_extrusion: {raw_extrusion}") # Debug
     print(f"{_printer_slug(printer_ip)}_raw_extrusion_reference: {raw_extrusion_reference}") # Debug
     if raw_extrusion is not None:
+        if raw_extrusion > TOTAL_FILAMENT_LENGTH and raw_extrusion_reference == 0:
+            raw_extrusion = raw_extrusion - TOTAL_FILAMENT_LENGTH
         extrusion_from_reference = raw_extrusion - raw_extrusion_reference
         filament_left = TOTAL_FILAMENT_LENGTH - extrusion_from_reference
         if filament_left < FILAMENT_LEFT_ALERT:
+            print(f"Filament Low: {_printer_slug(printer_ip)}") # Debug
             notify(
                 "Filament Low",
                 f"{_printer_slug(printer_ip)}\n"
@@ -268,20 +273,32 @@ def main() -> None:
     web_thread.start()
     print(f"Web UI: http://localhost:{WEB_PORT}")
     print(f"Checking {PRINTER1_IP} and {PRINTER2_IP}...")
-    while True:
-        check_reply(PRINTER1_IP, NTFY1)
-        check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
-        check_state_status(PRINTER1_IP)
+    def loop_check_seqs_reply() -> None:
+        while True:
+            check_reply(PRINTER1_IP, NTFY1)
+            check_reply(PRINTER2_IP, NTFY2)
+            time.sleep(REQUEST_REPLY)
 
-        check_reply(PRINTER2_IP, NTFY2)
-        check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
-        check_state_status(PRINTER2_IP)
+    def loop_check_extrusion_and_state() -> None:
+        while True:
+            check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
+            check_state_status(PRINTER1_IP)
 
-        with ui_lock:
-            ui_state["date_time"] = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
+            check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
+            check_state_status(PRINTER2_IP)
+
+            with ui_lock:
+                ui_state["date_time"] = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
+
+            time.sleep(REQUEST_TEN_SECONDS)
         
-        time.sleep(REQUEST_REPLY)
 
+    seqs_thread = threading.Thread(target=loop_check_seqs_reply, name="seqs-reply")
+    extrusion_and_state_thread = threading.Thread(target=loop_check_extrusion_and_state, name="extrusion-and-state")
+    seqs_thread.start()
+    extrusion_and_state_thread.start()
+    seqs_thread.join()
+    extrusion_and_state_thread.join()
 if __name__ == "__main__":
     main()
 
