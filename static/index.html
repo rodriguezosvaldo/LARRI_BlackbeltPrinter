@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BB Printer Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      background: #0d0d0d;
+      color: #f0f0f0;
+      font-family: "Patrick Hand", "Segoe Print", cursive;
+      font-size: 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+
+    .dashboard {
+      width: min(1100px, 100%);
+      border: 1px solid #555;
+      border-radius: 14px;
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .header {
+      border-bottom: 1px solid #555;
+      padding: 0.75rem 1rem;
+      text-align: center;
+      letter-spacing: 0.04em;
+    }
+
+    .columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 420px;
+    }
+
+    .column {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .column + .column {
+      border-left: 1px solid #555;
+    }
+
+    .status-box {
+      border: 1px solid #555;
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+      min-height: 52px;
+      word-break: break-all;
+    }
+
+    .extrusion-panel {
+      flex: 1;
+      border: 1px solid #555;
+      border-radius: 12px;
+      padding: 1.25rem 1rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .data-lines {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0 0.5rem;
+    }
+
+    .data-lines span {
+      display: block;
+    }
+
+    .value {
+      color: #d8ffd8;
+    }
+
+    .value.muted {
+      color: #888;
+    }
+
+    .btn-reset {
+      margin-top: auto;
+      background: #0a4d0a;
+      color: #fff;
+      border: 1px solid #fff;
+      border-radius: 10px;
+      padding: 0.55rem 1.75rem;
+      font-family: inherit;
+      font-size: 1.2rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-reset:hover {
+      background: #0d6b0d;
+    }
+
+    .btn-reset:active {
+      background: #083808;
+    }
+
+    .btn-reset:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+
+    @media (max-width: 700px) {
+      .columns {
+        grid-template-columns: 1fr;
+      }
+
+      .column + .column {
+        border-left: none;
+        border-top: 1px solid #555;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <header class="header" id="clock">—</header>
+
+    <div class="columns">
+      <section class="column" data-printer="1">
+        <div class="status-box" id="status-1">—</div>
+        <div class="extrusion-panel">
+          <div class="data-lines">
+            <span>job.rawExtrusion: <span class="value" id="raw-1">—</span></span>
+            <span>raw_extrusion_reference: <span class="value" id="ref-1">—</span></span>
+          </div>
+          <button class="btn-reset" data-printer="1">Reset reference</button>
+        </div>
+      </section>
+
+      <section class="column" data-printer="2">
+        <div class="status-box" id="status-2">—</div>
+        <div class="extrusion-panel">
+          <div class="data-lines">
+            <span>job.rawExtrusion: <span class="value" id="raw-2">—</span></span>
+            <span>raw_extrusion_reference: <span class="value" id="ref-2">—</span></span>
+          </div>
+          <button class="btn-reset" data-printer="2">Reset reference</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    function formatValue(value) {
+      if (value === null || value === undefined) return "—";
+      if (typeof value === "number") return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      return String(value);
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById("clock").textContent = data.date_time || "—";
+
+        for (const key of ["printer1", "printer2"]) {
+          const num = key === "printer1" ? "1" : "2";
+          const p = data[key];
+          if (!p) continue;
+
+          const statusText = p.state_status
+            ? `${p.label || p.ip}: ${p.state_status}`
+            : `${p.label || p.ip}: offline`;
+          document.getElementById(`status-${num}`).textContent = statusText;
+
+          const rawEl = document.getElementById(`raw-${num}`);
+          rawEl.textContent = formatValue(p.raw_extrusion);
+          rawEl.classList.toggle("muted", p.raw_extrusion === null);
+
+          const refEl = document.getElementById(`ref-${num}`);
+          refEl.textContent = formatValue(p.raw_extrusion_reference);
+        }
+      } catch (_) {
+        /* server may be starting */
+      }
+    }
+
+    async function resetReference(printerId, button) {
+      button.disabled = true;
+      try {
+        const res = await fetch(`/api/reset-reference/${printerId}`, { method: "POST" });
+        if (res.ok) await fetchStatus();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    document.querySelectorAll(".btn-reset").forEach((btn) => {
+      btn.addEventListener("click", () => resetReference(btn.dataset.printer, btn));
+    });
+
+    fetchStatus();
+    setInterval(fetchStatus, 1000);
+  </script>
+</body>
+</html>
