@@ -24,7 +24,7 @@ NTFY2 = os.getenv("NTFY2")
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 
 TOTAL_FILAMENT_LENGTH = 1498000 # mm - New filanent (4kg)
-FILAMENT_LEFT_ALERT = 10000 # mm
+FILAMENT_LEFT_ALERT = 20000 # mm - 20 meters
 raw_extrusion_reference1 = 0 # mm
 raw_extrusion_reference2 = 0 # mm
 
@@ -52,6 +52,7 @@ ui_state = {
 
 REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
 REQUEST_TEN_SECONDS = 10   # check every 10 seconds
+MAX_PROBLEM_NOTIFICATIONS = 2  # normal alerts before the final "no more" message
 
 MESSAGE_START_PRINTING = "selected for printing"
 MESSAGE_END_PRINTING = "printing finished" # This value is not checked in real reply
@@ -75,6 +76,56 @@ def notify(title: str, message: str, priority: str = "default", tags: str = "", 
         )
     except Exception as e:
         print(f"[notify error] {e}")
+
+
+def _problem_notifications(printer_ip: str) -> dict:
+    prev = _prev(printer_ip)
+    if "problem_notifications" not in prev:
+        prev["problem_notifications"] = {}
+    return prev["problem_notifications"]
+
+
+def clear_problem_notification(printer_ip: str, problem_key: str) -> None:
+    _problem_notifications(printer_ip).pop(problem_key, None)
+
+
+def stop_notifications(
+    printer_ip: str,
+    problem_key: str,
+    title: str,
+    message: str,
+    *,
+    priority: str = "default",
+    tags: str = "",
+    ntfy: str,
+) -> bool:
+    counts = _problem_notifications(printer_ip)
+    state = counts.get(problem_key)
+
+    if state == "suppressed":
+        return False
+
+    n = state if isinstance(state, int) else 0
+
+    if n < MAX_PROBLEM_NOTIFICATIONS:
+        notify(title, message, priority=priority, tags=tags, ntfy=ntfy)
+        counts[problem_key] = n + 1
+        return True
+
+    if n == MAX_PROBLEM_NOTIFICATIONS:
+        notify(
+            f"{title} (Last Notification)",
+            f"{message}\n\n"
+            "This will be the last notification, but the problem is very likely to continue.",
+            priority=priority,
+            tags=tags,
+            ntfy=ntfy,
+        )
+        counts[problem_key] = "suppressed"
+        return True
+
+    return False
+
 
 def get_seqs_reply(printer_ip: str) -> dict:
     try:
@@ -195,7 +246,9 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
         if seqs_reply != prev["seqs_reply"] and prev["seqs_reply"] is not None:
             reply = get_reply(printer_ip)
             if reply:
-                notify(
+                stop_notifications(
+                    printer_ip,
+                    f"m118:{reply}",
                     "New M118 Message",
                     f"{_printer_slug(printer_ip)}\n"
                     f"Message: {reply}",
@@ -213,15 +266,20 @@ def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: flo
             raw_extrusion = raw_extrusion - TOTAL_FILAMENT_LENGTH
         extrusion_from_reference = raw_extrusion - raw_extrusion_reference
         filament_left = TOTAL_FILAMENT_LENGTH - extrusion_from_reference
+        key_filament = "filament_low"
         if filament_left < FILAMENT_LEFT_ALERT:
-            notify(
+            stop_notifications(
+                printer_ip,
+                key_filament,
                 "Filament Low",
                 f"{_printer_slug(printer_ip)}\n"
-                f"Filament Consumed: {extrusion_from_reference} mm\n"
-                f"Filament Left: {filament_left} mm",
+                f"Filament Consumed: {extrusion_from_reference:.2f} mm\n"
+                f"Filament Left: {filament_left:.2f} mm",
                 tags="warning",
                 ntfy=ntfy,
             )
+        else:
+            clear_problem_notification(printer_ip, key_filament)
 
 def check_state_status(printer_ip: str) -> str:
     state_status = get_state_status(printer_ip)
