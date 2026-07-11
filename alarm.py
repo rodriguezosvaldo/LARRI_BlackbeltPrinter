@@ -57,6 +57,10 @@ MAX_PROBLEM_NOTIFICATIONS = 2  # normal alerts before the final "no more" messag
 MESSAGE_START_PRINTING = "selected for printing"
 MESSAGE_END_PRINTING = "printing finished" # This value is not checked in real reply
 
+# See: https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation
+PRINTING_STATES = {"processing", "simulating"}
+STOPPED_STATES = {"paused", "pausing", "halted", "cancelling", "off", "idle"}
+
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 
 
@@ -223,6 +227,8 @@ def _default_prev() -> dict:
         # Static values
         "job_seq": None,
         "seqs_reply": None,
+        # Dynamic values
+        "status": None,
     }
 
 prev_by_printer: dict[str, dict] = {}
@@ -281,11 +287,53 @@ def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: flo
         else:
             clear_problem_notification(printer_ip, key_filament)
 
-def check_state_status(printer_ip: str) -> str:
-    state_status = get_state_status(printer_ip)
-    _update_ui(printer_ip, state_status=state_status)
-    print(f"{_printer_slug(printer_ip)}_state_status: {state_status}") # Debug
-    return state_status
+def check_state_status(printer_ip: str, ntfy: str) -> str:
+    # state.status: main indicator of pause/stop/halt (edge detection)
+    prev = _prev(printer_ip)
+    status = get_state_status(printer_ip)
+    _update_ui(printer_ip, state_status=status)
+    last = prev["status"]
+    if status is not None and status != last and last is not None:
+        slug = _printer_slug(printer_ip)
+        if status == "halted":
+            notify(
+                "Printer Halted",
+                f"{slug}\n"
+                f"state {last} -> halted (emergency stop)",
+                priority="urgent",
+                tags="rotating_light",
+                ntfy=ntfy,
+            )
+        elif status == "paused" and last not in {"pausing", "paused"}:
+            notify(
+                "Print Paused",
+                f"{slug}\n"
+                f"state {last} -> paused",
+                priority="high",
+                tags="pause_button",
+                ntfy=ntfy,
+            )
+        elif status == "resuming":
+            notify(
+                "Print Resuming",
+                f"{slug}\n"
+                f"state {last} -> resuming",
+                tags="arrow_forward",
+                ntfy=ntfy,
+            )
+        elif last in PRINTING_STATES and status in STOPPED_STATES:
+            notify(
+                "Print Stopped",
+                f"{slug}\n"
+                f"state {last} -> {status}",
+                priority="urgent",
+                tags="octagonal_sign,warning",
+                ntfy=ntfy,
+            )
+    if status is not None:
+        prev["status"] = status
+    print(f"{_printer_slug(printer_ip)}_state_status: {status}")  # Debug
+    return status
 
 
 # ============================ Web UI ============================
@@ -334,10 +382,10 @@ def main() -> None:
     def loop_check_extrusion_and_state() -> None:
         while True:
             check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
-            check_state_status(PRINTER1_IP)
+            check_state_status(PRINTER1_IP, NTFY1)
 
             check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
-            check_state_status(PRINTER2_IP)
+            check_state_status(PRINTER2_IP, NTFY2)
 
             with ui_lock:
                 ui_state["date_time"] = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
