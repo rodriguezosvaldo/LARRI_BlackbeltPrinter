@@ -40,6 +40,7 @@ ui_state = {
         "state_status": None,
         "raw_extrusion": None,
         "raw_extrusion_reference": 0,
+        "layer": None,
     },
     "printer2": {
         "ip": PRINTER2_IP,
@@ -47,6 +48,7 @@ ui_state = {
         "state_status": None,
         "raw_extrusion": None,
         "raw_extrusion_reference": 0,
+        "layer": None,
     },
 }
 
@@ -178,7 +180,34 @@ def get_state_status(printer_ip: str) -> str:
     except Exception as e:
         print(f"[get_state_status error] {printer_ip}: {e}")
         return None
-    
+
+def get_layer(printer_ip: str):
+    try:
+        r = requests.get(
+            f"{printer_ip}/rr_model",
+            params={"key": "job.layer", "flags": "d99nfo"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("result")
+    except Exception as e:
+        print(f"[get_layer error] {printer_ip}: {e}")
+        return None
+
+def get_layers(printer_ip: str):
+    # Past layers: height / filament. Only available in SBC (DSF) or via DWC.
+    try:
+        r = requests.get(
+            f"{printer_ip}/rr_model",
+            params={"key": "job.layers", "flags": "d99nfo"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("result")
+    except Exception as e:
+        print(f"[get_layers error] {printer_ip}: {e}")
+        return None
+
 # ============================ Helpers ============================
 def _printer_slug(printer_ip: str) -> str:
     return printer_ip.rstrip("/").split("/")[-1] or "printer"
@@ -190,6 +219,9 @@ def _printer_ui_key(printer_ip: str) -> str:
     return "printer2"
 
 
+_UI_UNSET = object()
+
+
 def _init_ui_state() -> None:
     with ui_lock:
         for key, ip in (("printer1", PRINTER1_IP), ("printer2", PRINTER2_IP)):
@@ -197,7 +229,7 @@ def _init_ui_state() -> None:
             ui_state[key]["label"] = _printer_slug(ip) if ip else key
 
 
-def _update_ui(printer_ip: str, *, state_status=None, raw_extrusion=None) -> None:
+def _update_ui(printer_ip: str, *, state_status=None, raw_extrusion=None, layer=_UI_UNSET) -> None:
     key = _printer_ui_key(printer_ip)
     ref = raw_extrusion_reference1 if key == "printer1" else raw_extrusion_reference2
     with ui_lock:
@@ -205,6 +237,8 @@ def _update_ui(printer_ip: str, *, state_status=None, raw_extrusion=None) -> Non
             ui_state[key]["state_status"] = state_status
         if raw_extrusion is not None:
             ui_state[key]["raw_extrusion"] = raw_extrusion
+        if layer is not _UI_UNSET:
+            ui_state[key]["layer"] = layer
         ui_state[key]["raw_extrusion_reference"] = ref
 
 
@@ -229,6 +263,9 @@ def _default_prev() -> dict:
         "seqs_reply": None,
         # Dynamic values
         "status": None,
+        "layer": None,
+        "layer_height": None,
+        "layer_filament": None,
     }
 
 prev_by_printer: dict[str, dict] = {}
@@ -305,10 +342,16 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
                 ntfy=ntfy,
             )
         elif status == "paused" and last not in {"pausing", "paused"}:
+            layer = prev.get("layer")
+            layer_height = prev.get("layer_height")
+            layer_filament = prev.get("layer_filament")
             notify(
                 "Print Paused",
                 f"{slug}\n"
-                f"state {last} -> paused",
+                f"state {last} -> paused\n"
+                f"Current layer: {layer}\n"
+                f"Layer height: {layer_height}mm\n"
+                f"Layer extruded filament: {layer_filament}",
                 priority="high",
                 tags="pause_button",
                 ntfy=ntfy,
@@ -334,6 +377,28 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
         prev["status"] = status
     print(f"{_printer_slug(printer_ip)}_state_status: {status}")  # Debug
     return status
+
+def check_layer(printer_ip: str) -> None:
+    prev = _prev(printer_ip)
+    layer = get_layer(printer_ip)
+    layers = get_layers(printer_ip)
+
+    layer_height = None
+    layer_filament = None
+    if isinstance(layers, list) and layers:
+        entry = None
+        if isinstance(layer, int) and 1 <= layer <= len(layers):
+            entry = layers[layer - 1]
+        else:
+            entry = layers[-1]
+        if isinstance(entry, dict):
+            layer_height = entry.get("height")
+            layer_filament = entry.get("filament")
+
+    prev["layer"] = layer
+    prev["layer_height"] = layer_height
+    prev["layer_filament"] = layer_filament
+    _update_ui(printer_ip, layer=layer)
 
 
 # ============================ Web UI ============================
@@ -382,9 +447,11 @@ def main() -> None:
     def loop_check_extrusion_and_state() -> None:
         while True:
             check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
+            check_layer(PRINTER1_IP, NTFY1)
             check_state_status(PRINTER1_IP, NTFY1)
 
             check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
+            check_layer(PRINTER2_IP, NTFY2)
             check_state_status(PRINTER2_IP, NTFY2)
 
             with ui_lock:

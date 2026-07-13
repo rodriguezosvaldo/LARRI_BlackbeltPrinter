@@ -150,6 +150,7 @@
           </div>
           <button class="btn-reset" data-printer="1">Reset reference</button>
         </div>
+        <div class="status-box">Current layer: <span class="value" id="layer-1">—</span></div>
       </section>
 
       <section class="column" data-printer="2">
@@ -161,6 +162,7 @@
           </div>
           <button class="btn-reset" data-printer="2">Reset reference</button>
         </div>
+        <div class="status-box">Current layer: <span class="value" id="layer-2">—</span></div>
       </section>
     </div>
   </div>
@@ -196,6 +198,10 @@
 
           const refEl = document.getElementById(`ref-${num}`);
           refEl.textContent = formatValue(p.raw_extrusion_reference);
+
+          const layerEl = document.getElementById(`layer-${num}`);
+          layerEl.textContent = formatValue(p.layer);
+          layerEl.classList.toggle("muted", p.layer === null || p.layer === undefined);
         }
       } catch (_) {
         /* server may be starting */
