@@ -447,11 +447,11 @@ def main() -> None:
     def loop_check_extrusion_and_state() -> None:
         while True:
             check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
-            check_layer(PRINTER1_IP, NTFY1)
+            check_layer(PRINTER1_IP)
             check_state_status(PRINTER1_IP, NTFY1)
 
             check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
-            check_layer(PRINTER2_IP, NTFY2)
+            check_layer(PRINTER2_IP)
             check_state_status(PRINTER2_IP, NTFY2)
 
             with ui_lock:
