@@ -4,14 +4,14 @@
 
 // Network credentials
 const char* ssid = "REMOVED";
-const char* password = "12345678";
+const char* password = "REMOVED";
 
 // ---- Sensors -------------------------------------------------------------
 // Two DHT22s. Sensor 1 is the primary (drives the thermostat by default).
 // Wire the second sensor's data line to DHTPIN2; both share 3V3 + GND and
 // each wants its own ~10k pull-up on the data line.
-#define DHTPIN1 33
-#define DHTPIN2 32                 // second sensor data pin (change as needed)
+#define DHTPIN1 17
+#define DHTPIN2 22                 // second sensor data pin (change as needed)
 #define DHTTYPE DHT22
 DHT dht1(DHTPIN1, DHTTYPE);
 DHT dht2(DHTPIN2, DHTTYPE);
