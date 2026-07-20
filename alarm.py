@@ -66,8 +66,6 @@ STOPPED_STATES = {"paused", "pausing", "halted", "cancelling", "off", "idle"}
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 
 
-
-
 def notify(title: str, message: str, priority: str = "default", tags: str = "", ntfy: str = NTFY1) -> None:
     print(f"[ALARM] {title}: {message}")
     try:
@@ -194,20 +192,6 @@ def get_layer(printer_ip: str):
         print(f"[get_layer error] {printer_ip}: {e}")
         return None
 
-def get_layers(printer_ip: str):
-    # Past layers: height / filament. Only available in SBC (DSF) or via DWC.
-    try:
-        r = requests.get(
-            f"{printer_ip}/rr_model",
-            params={"key": "job.layers", "flags": "d99nfo"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json().get("result")
-    except Exception as e:
-        print(f"[get_layers error] {printer_ip}: {e}")
-        return None
-
 # ============================ Helpers ============================
 def _printer_slug(printer_ip: str) -> str:
     return printer_ip.rstrip("/").split("/")[-1] or "printer"
@@ -264,8 +248,6 @@ def _default_prev() -> dict:
         # Dynamic values
         "status": None,
         "layer": None,
-        "layer_height": None,
-        "layer_filament": None,
     }
 
 prev_by_printer: dict[str, dict] = {}
@@ -381,23 +363,8 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
 def check_layer(printer_ip: str) -> None:
     prev = _prev(printer_ip)
     layer = get_layer(printer_ip)
-    layers = get_layers(printer_ip)
-
-    layer_height = None
-    layer_filament = None
-    if isinstance(layers, list) and layers:
-        entry = None
-        if isinstance(layer, int) and 1 <= layer <= len(layers):
-            entry = layers[layer - 1]
-        else:
-            entry = layers[-1]
-        if isinstance(entry, dict):
-            layer_height = entry.get("height")
-            layer_filament = entry.get("filament")
-
+   
     prev["layer"] = layer
-    prev["layer_height"] = layer_height
-    prev["layer_filament"] = layer_filament
     _update_ui(printer_ip, layer=layer)
 
 
