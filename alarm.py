@@ -325,15 +325,11 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
             )
         elif status == "paused" and last not in {"pausing", "paused"}:
             layer = prev.get("layer")
-            layer_height = prev.get("layer_height")
-            layer_filament = prev.get("layer_filament")
             notify(
                 "Print Paused",
                 f"{slug}\n"
                 f"state {last} -> paused\n"
-                f"Current layer: {layer}\n"
-                f"Layer height: {layer_height}mm\n"
-                f"Layer extruded filament: {layer_filament}",
+                f"Current layer: {layer}\n",
                 priority="high",
                 tags="pause_button",
                 ntfy=ntfy,

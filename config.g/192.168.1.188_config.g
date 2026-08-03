@@ -49,9 +49,9 @@ M569 P1.2 S0                                    ; driver 1.2 goes backwards (ext
 ; Drive mapping for SINGLE HEAD ST + XL___________________________________________________________________________________________
 
 M584 X0.0 Y0.1:0.2 Z0.3 E1.0:1.1                            ; set drive mapping
-M350 X16 Y16 Z16 E16:16 I1                                  ; configure microstepping with interpolation
+M350 X16 Y16 Z16 E16:16 I1                                  ; configure microstepping with interpolation (Example: X16 means that every step of the X axis is divided into 16 microsteps, this allows for more precise movement and reduces vibration, but also increases the pulses per mm {more current consumption}... I1 interpolation enabled: the firmware will interpolate the steps between the microsteps reducing vibration)
 M92 X100 Y88.89 Z317.41 E676.34:676.34                      ; configure steps per mm
-M566 X600 Y600 Z600 E120:120                                ; set maximum instantaneous speed changes (mm/min)
+M566 X600 Y600 Z600 E120:120                                ; set maximum instantaneous speed changes (mm/min) This is related to speed in direction changes, which is related to printing on edges and curves.
 M203 X15000 Y15000 Z3000 E3600:3600                           ; set maximum speeds (mm/min)
 M201 X1000 Y1000 Z500 E350:350                                ; set accelerations (mm/s^2)
 M906 X1400 Y1400 Z1000 E720:720 I50                         ; set motor currents (mA) and motor idle factor in per cent
