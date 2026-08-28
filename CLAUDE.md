@@ -17,6 +17,13 @@ independent parts:
    each printer's SD card, kept here for reference/version control. `GCODE_CHEATSHEET.md`
    documents the G/M-codes used in them.
 
+Also present: `IF_S1_Plus_firmware.bin`, the stock factory firmware dump for an
+[InfinityFlow S1 Plus](https://infinityflow3d.com/products/s1-plus-automatic-filament-loader)
+automatic filament loader — kept for reference while planning custom firmware that links
+the loader to the BlackBelt printers' state. `S1_PLUS_FIRMWARE_ANALYSIS.md` documents what
+that stock firmware's architecture and local/cloud protocols were found to be (via string
+analysis, since it's a binary with no source in this repo).
+
 ## Running
 
 ```bash
