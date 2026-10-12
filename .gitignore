@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 logs/
+load cel/hx711/include/secrets.h
+dht22_secrets.h

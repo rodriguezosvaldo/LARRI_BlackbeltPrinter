@@ -2,9 +2,11 @@
 #include <WebServer.h>
 #include <DHT.h>
 
+#include "dht22_secrets.h"  // defines WIFI_SSID, WIFI_PASS (gitignored, see dht22_secrets.example.h)
+
 // Network credentials
-const char* ssid = "REMOVED";
-const char* password = "REMOVED";
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASS;
 
 // ---- Sensors -------------------------------------------------------------
 // Two DHT22s. Sensor 1 is the primary (drives the thermostat by default).
