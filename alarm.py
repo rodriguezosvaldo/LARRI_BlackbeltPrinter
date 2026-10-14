@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from dotenv import load_dotenv
 from pathlib import Path
@@ -54,7 +55,6 @@ ui_state = {
 
 REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
 REQUEST_TEN_SECONDS = 10   # check every 10 seconds
-MAX_PROBLEM_NOTIFICATIONS = 2  # normal alerts before the final "no more" message
 
 MESSAGE_START_PRINTING = "selected for printing"
 MESSAGE_END_PRINTING = "printing finished" # This value is not checked in real reply
@@ -66,7 +66,19 @@ STOPPED_STATES = {"paused", "pausing", "halted", "cancelling", "off", "idle"}
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 
 
+def _fmt_dt(dt: datetime, sep: str = " ") -> str:
+    # e.g. "10/11/2026 11:44 am"
+    hour = dt.hour % 12 or 12
+    return f"{dt:%m/%d/%Y}{sep}{hour}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
+
+
+def _timestamp() -> str:
+    # e.g. "10/11/2026\n11:44 am"
+    return _fmt_dt(datetime.now(), sep="\n")
+
+
 def notify(title: str, message: str, priority: str = "default", tags: str = "", ntfy: str = NTFY1) -> None:
+    message = f"{message}\n\n{_timestamp()}"
     print(f"[ALARM] {title}: {message}")
     try:
         headers = {"Title": title, "Priority": priority}
@@ -82,18 +94,18 @@ def notify(title: str, message: str, priority: str = "default", tags: str = "", 
         print(f"[notify error] {e}")
 
 
-def _problem_notifications(printer_ip: str) -> dict:
+def _notified_problems(printer_ip: str) -> set:
     prev = _prev(printer_ip)
-    if "problem_notifications" not in prev:
-        prev["problem_notifications"] = {}
-    return prev["problem_notifications"]
+    if "notified_problems" not in prev:
+        prev["notified_problems"] = set()
+    return prev["notified_problems"]
 
 
 def clear_problem_notification(printer_ip: str, problem_key: str) -> None:
-    _problem_notifications(printer_ip).pop(problem_key, None)
+    _notified_problems(printer_ip).discard(problem_key)
 
 
-def stop_notifications(
+def notify_once(
     printer_ip: str,
     problem_key: str,
     title: str,
@@ -103,32 +115,13 @@ def stop_notifications(
     tags: str = "",
     ntfy: str,
 ) -> bool:
-    counts = _problem_notifications(printer_ip)
-    state = counts.get(problem_key)
-
-    if state == "suppressed":
+    # Send a single alert per problem until clear_problem_notification() is called
+    notified = _notified_problems(printer_ip)
+    if problem_key in notified:
         return False
-
-    n = state if isinstance(state, int) else 0
-
-    if n < MAX_PROBLEM_NOTIFICATIONS:
-        notify(title, message, priority=priority, tags=tags, ntfy=ntfy)
-        counts[problem_key] = n + 1
-        return True
-
-    if n == MAX_PROBLEM_NOTIFICATIONS:
-        notify(
-            f"{title} (Last Notification)",
-            f"{message}\n\n"
-            "This will be the last notification, but the problem is very likely to continue.",
-            priority=priority,
-            tags=tags,
-            ntfy=ntfy,
-        )
-        counts[problem_key] = "suppressed"
-        return True
-
-    return False
+    notify(title, message, priority=priority, tags=tags, ntfy=ntfy)
+    notified.add(problem_key)
+    return True
 
 
 def get_seqs_reply(printer_ip: str) -> dict:
@@ -179,6 +172,20 @@ def get_state_status(printer_ip: str) -> str:
         print(f"[get_state_status error] {printer_ip}: {e}")
         return None
 
+def get_job(printer_ip: str) -> dict:
+    # file.fileName is null when no job is running; duration = seconds since the job started
+    try:
+        r = requests.get(
+            f"{printer_ip}/rr_model",
+            params={"key": "job", "flags": "d99vno"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("result")
+    except Exception as e:
+        print(f"[get_job error] {printer_ip}: {e}")
+        return None
+
 def get_layer(printer_ip: str):
     try:
         r = requests.get(
@@ -197,6 +204,17 @@ def _printer_slug(printer_ip: str) -> str:
     return printer_ip.rstrip("/").split("/")[-1] or "printer"
 
 
+def _printer_label(printer_ip: str) -> str:
+    if not printer_ip:
+        return "printer"
+    normalized = printer_ip.rstrip("/")
+    if normalized.endswith("192.168.1.243"):
+        return "Printer 1"
+    if normalized.endswith("192.168.1.188"):
+        return "Printer 2"
+    return _printer_slug(printer_ip)
+
+
 def _printer_ui_key(printer_ip: str) -> str:
     if printer_ip == PRINTER1_IP:
         return "printer1"
@@ -210,7 +228,7 @@ def _init_ui_state() -> None:
     with ui_lock:
         for key, ip in (("printer1", PRINTER1_IP), ("printer2", PRINTER2_IP)):
             ui_state[key]["ip"] = ip
-            ui_state[key]["label"] = _printer_slug(ip) if ip else key
+            ui_state[key]["label"] = _printer_label(ip) if ip else key
 
 
 def _update_ui(printer_ip: str, *, state_status=None, raw_extrusion=None, layer=_UI_UNSET) -> None:
@@ -248,6 +266,7 @@ def _default_prev() -> dict:
         # Dynamic values
         "status": None,
         "layer": None,
+        "job_log": None,  # active print log: path, file, start, pause_start, paused_total
     }
 
 prev_by_printer: dict[str, dict] = {}
@@ -259,6 +278,7 @@ def _prev(printer_ip: str) -> dict:
 
 # ============================ Save Last Reply ============================
 def save_last_reply(printer_ip: str, reply: str) -> None:
+    LOG_DIR.mkdir(exist_ok=True)
     log_path = LOG_DIR / f"replies_{_printer_slug(printer_ip)}.jsonl"
     with open(log_path, "a") as f:
         f.write(f"{datetime.now().strftime('%Y-%m-%d  %H:%M:%S')},{reply}\n")
@@ -271,7 +291,7 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
         if seqs_reply != prev["seqs_reply"] and prev["seqs_reply"] is not None:
             reply = get_reply(printer_ip)
             if reply:
-                stop_notifications(
+                notify_once(
                     printer_ip,
                     f"m118:{reply}",
                     "New M118 Message",
@@ -293,7 +313,7 @@ def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: flo
         filament_left = TOTAL_FILAMENT_LENGTH - extrusion_from_reference
         key_filament = "filament_low"
         if filament_left < FILAMENT_LEFT_ALERT:
-            stop_notifications(
+            notify_once(
                 printer_ip,
                 key_filament,
                 "Filament Low",
@@ -356,6 +376,106 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
     print(f"{_printer_slug(printer_ip)}_state_status: {status}")  # Debug
     return status
 
+# ============================ Print Job Log ============================
+PAUSED_STATES = {"pausing", "paused"}
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h {m:02d}m {s:02d}s" if h else f"{m}m {s:02d}s"
+
+
+def _job_log_write(log: dict, line: str) -> None:
+    try:
+        with open(log["path"], "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[job log error] {log['path']}: {e}")
+
+
+def _job_log_start(printer_ip: str, file_name: str, duration) -> dict:
+    # p1_243_2026-10-11_<job>.log (_2, _3... if the same job prints again that day)
+    now = datetime.now()
+    start = datetime.fromtimestamp(now.timestamp() - (duration or 0))
+    num = "p1" if printer_ip == PRINTER1_IP else "p2"
+    octet = _printer_slug(printer_ip).split(".")[-1]
+    job = re.sub(r"[^\w.-]+", "_", Path(file_name.replace("\\", "/")).stem)
+    LOG_DIR.mkdir(exist_ok=True)
+    base = f"{num}_{octet}_{start:%Y-%m-%d}_{job}"
+    path = LOG_DIR / f"{base}.log"
+    n = 2
+    while path.exists():
+        path = LOG_DIR / f"{base}_{n}.log"
+        n += 1
+    log = {
+        "path": path,
+        "file": file_name,
+        "start": start,
+        "pause_start": None,
+        "paused_total": 0.0,
+    }
+    _job_log_write(log, f"Job: {file_name}")
+    _job_log_write(log, f"Printer: {_printer_label(printer_ip)} ({_printer_slug(printer_ip)})")
+    note = "  (log started mid-print)" if (duration or 0) > 2 * REQUEST_TEN_SECONDS else ""
+    _job_log_write(log, f"START   {_fmt_dt(start)}{note}")
+    return log
+
+
+def _job_log_resume(log: dict, now: datetime) -> None:
+    paused = (now - log["pause_start"]).total_seconds()
+    log["paused_total"] += paused
+    log["pause_start"] = None
+    _job_log_write(log, f"RESUME  {_fmt_dt(now)}  (paused {_fmt_duration(paused)})")
+
+
+def _job_log_end(log: dict, job: dict, now: datetime) -> None:
+    if log["pause_start"] is not None:
+        _job_log_resume(log, now)
+    if job.get("lastFileCancelled"):
+        result = "cancelled"
+    elif job.get("lastFileAborted"):
+        result = "aborted"
+    else:
+        result = "finished"
+    total = job.get("lastDuration") or (now - log["start"]).total_seconds()
+    _job_log_write(
+        log,
+        f"END     {_fmt_dt(now)}  {result} | total {_fmt_duration(total)}"
+        f" | paused {_fmt_duration(log['paused_total'])}",
+    )
+
+
+def check_job_log(printer_ip: str, status: str) -> None:
+    # One log file per print: START, every PAUSE/RESUME, END
+    if status is None:
+        return
+    job = get_job(printer_ip)
+    if job is None:
+        return
+    prev = _prev(printer_ip)
+    log = prev["job_log"]
+    now = datetime.now()
+    file_name = (job.get("file") or {}).get("fileName")
+
+    if log is not None and file_name != log["file"]:
+        _job_log_end(log, job, now)
+        log = prev["job_log"] = None
+
+    if file_name is None:
+        return
+
+    if log is None:
+        log = prev["job_log"] = _job_log_start(printer_ip, file_name, job.get("duration"))
+
+    if status in PAUSED_STATES and log["pause_start"] is None:
+        log["pause_start"] = now
+        _job_log_write(log, f"PAUSE   {_fmt_dt(now)}")
+    elif status not in PAUSED_STATES and log["pause_start"] is not None:
+        _job_log_resume(log, now)
+
+
 def check_layer(printer_ip: str) -> None:
     prev = _prev(printer_ip)
     layer = get_layer(printer_ip)
@@ -411,11 +531,13 @@ def main() -> None:
         while True:
             check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
             check_layer(PRINTER1_IP)
-            check_state_status(PRINTER1_IP, NTFY1)
+            status1 = check_state_status(PRINTER1_IP, NTFY1)
+            check_job_log(PRINTER1_IP, status1)
 
             check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
             check_layer(PRINTER2_IP)
-            check_state_status(PRINTER2_IP, NTFY2)
+            status2 = check_state_status(PRINTER2_IP, NTFY2)
+            check_job_log(PRINTER2_IP, status2)
 
             with ui_lock:
                 ui_state["date_time"] = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')

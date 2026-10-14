@@ -62,11 +62,10 @@ Key patterns to preserve when editing:
   value against a per-printer `_prev()` dict and only notifies on a *transition* (e.g.
   `processing -> paused`), not on every poll. Update `prev[...]` even when not notifying, or
   edge detection breaks.
-- **`stop_notifications()` de-dupe**: for problems that recur every poll (filament low, new
-  M118 message), don't call `notify()` directly — route through `stop_notifications(printer_ip,
-  problem_key, ...)`. It sends up to `MAX_PROBLEM_NOTIFICATIONS` (2) alerts, then one final
-  "last notification" message, then goes silent until `clear_problem_notification()` is called
-  (when the condition clears).
+- **`notify_once()` de-dupe**: for problems that recur every poll (filament low, new M118
+  message), don't call `notify()` directly — route through `notify_once(printer_ip,
+  problem_key, ...)`. It sends a single alert, then stays silent for that key until
+  `clear_problem_notification()` is called (when the condition clears).
 - **`ui_state`/`ui_lock`**: the web UI reads a shared dict guarded by `ui_lock`. Any new
   per-printer value that should show up in the dashboard needs to flow through `_update_ui()`
   under the lock, mirroring `raw_extrusion`/`layer`/`state_status`.
@@ -75,12 +74,17 @@ Key patterns to preserve when editing:
   `GCODE_CHEATSHEET.md` and the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
   for available keys, and `PRINTING_STATES`/`STOPPED_STATES` in `alarm.py` for the state
   vocabulary.
+- **Print job logs** (`check_job_log`, called after `check_state_status` in the 10s loop): one
+  file per print in `logs/` (`p1_243_<start date>_<job>.log`, `_2`, `_3`... for repeats that day), with START,
+  every PAUSE/RESUME (with pause length) and END (finished/cancelled/aborted, total and paused
+  time). A job is detected by `job.file.fileName` being non-null; start time is
+  `now - job.duration`, and the job ends when `fileName` goes null or changes.
 - Notification failures (`notify()`, `get_*` HTTP calls) are caught and logged to stdout, never
   raised — a printer being briefly unreachable must not kill the polling loops.
 
 `legacy_alarm.py` is a superset of `alarm.py`'s checks (stall detection, MCU temp, VIN,
 heater/filament-sensor faults) kept for reference — it is not run. When porting a check back
-in, follow `alarm.py`'s current conventions (`_update_ui`, `stop_notifications`), not the
+in, follow `alarm.py`'s current conventions (`_update_ui`, `notify_once`), not the
 legacy file's.
 
 ## `dht22.cpp` (ESP32 sketch)
