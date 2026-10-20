@@ -39,7 +39,7 @@ NTFY2=https://ntfy.sh/<topic2>
 The web UI (status dashboard, `static/index.html`) is served at `http://localhost:5050` once
 `alarm.py` is running. Last printer replies are written under `logs/` (gitignored). There is
 no test suite, linter, or build step for the Python side. `requirements.txt` also includes
-`pyserial`, which is only used by `load cel/calibration.py`.
+`pyserial`, which is only used by `load cel/calibration.py` (serial mode).
 
 ## `alarm.py` architecture
 
@@ -79,6 +79,11 @@ Key patterns to preserve when editing:
   every PAUSE/RESUME (with pause length) and END (finished/cancelled/aborted, total and paused
   time). A job is detected by `job.file.fileName` being non-null; start time is
   `now - job.duration`, and the job ends when `fileName` goes null or changes.
+  Each job also gets a sibling `.csv` (`_job_log_sample`, one row per 10s poll: state, raw
+  extrusion, cumulative extruded mm, rolling `RATE_WINDOW` mm/min rate while printing). Extruded
+  length sums only positive `job.rawExtrusion` deltas (a drop = firmware reset). The END entry
+  adds a `FILAMENT` line (total mm, avg mm/min and cm³/h over non-paused time, using
+  `FILAMENT_DIAMETER`).
 - Notification failures (`notify()`, `get_*` HTTP calls) are caught and logged to stdout, never
   raised — a printer being briefly unreachable must not kill the polling loops.
 
@@ -104,16 +109,20 @@ Note the directory name has a space (`load cel`) — quote it in shell commands.
 
 - **`hx711/`** — PlatformIO project (`env:esp32dev`, Arduino framework, `bogde/HX711` lib,
   115200 baud). `src/main.cpp` reads two HX711 amplifiers (cell 1: DOUT 21 / SCK 22; cell 2:
-  DOUT 18 / SCK 19) every 2s, prints `HX711 #<n> reading: <raw>` over serial, and POSTs an
-  ntfy alert when a raw reading drops below `CELL{1,2}_LOW_THRESHOLD` for 3 polls. A
+  DOUT 18 / SCK 19) every 2s (non-blocking `millis()` timer, not `delay()`, so the web server
+  stays responsive), prints `HX711 #<n> reading: <raw>` over serial, serves the latest readings
+  as JSON at `GET http://<esp32-ip>/data` (`seq`, `ok`, `cell1`, `cell2`, `threshold1/2`; the IP
+  is printed over serial once WiFi connects), and POSTs an ntfy alert when a raw reading drops below `CELL{1,2}_LOW_THRESHOLD` for 3 polls. A
   `cellN_notified` flag prevents repeat alerts until the reading goes back above the
   threshold. Thresholds are raw HX711 counts (no tare/scale factor applied) and must be tuned
   per cell.
 - **`hx711/include/secrets.h`** (gitignored) — must define `WIFI_SSID`, `WIFI_PASS`,
   `P1_NTFY_URL`, `P2_NTFY_URL`. Currently `main.cpp` sends both cells' alerts to
   `P1_NTFY_URL`. Never commit or echo this file's contents.
-- **`calibration.py`** — `python calibration.py [COM_PORT]` (default `COM3`): parses the serial
-  output format above and prints mean / std-dev per cell every 100 readings, for picking
+- **`calibration.py`** — `python calibration.py [COM_PORT | <esp32-ip> | http://<esp32-ip>]`
+  (default: WiFi from `P2_IP` = `192.168.1.226`): reads over serial, or over WiFi by polling `/data` (skips repeated `seq`).
+  Parses the serial output format above and prints mean / std-dev per cell every 100 readings
+  (also appended to `load cel/calibration_cell<N>.log`), for picking
   thresholds. If you change the serial print format in `main.cpp`, update the regex here too.
 - `hx711/.pio/` is PlatformIO build output/library cache — don't edit.
 

@@ -26,7 +26,7 @@ BB_printer/
 ├── legacy_alarm.py          # older, larger version of alarm.py (reference only, not run)
 ├── dht22.cpp                # ESP32 enclosure temperature/humidity + heater controller
 ├── load cel/
-│   ├── calibration.py       # serial reader to calibrate load-cell thresholds
+│   ├── calibration.py       # serial/WiFi reader to calibrate load-cell thresholds
 │   ├── load_cell.png        # wiring/reference image
 │   └── hx711/               # PlatformIO project for the ESP32 + HX711 firmware
 ├── config.g/                # config.g for each printer
@@ -149,8 +149,13 @@ Thresholds (`CELL1_LOW_THRESHOLD`, `CELL2_LOW_THRESHOLD` in `src/main.cpp`) are 
 counts. To pick them, put a nearly-empty spool on each cell and run:
 
 ```bash
-python "load cel/calibration.py" COM3     # use your ESP32's serial port
+python "load cel/calibration.py" COM3             # over serial (your ESP32's port)
+python "load cel/calibration.py" 192.168.1.50     # over WiFi (IP printed on serial at boot)
 ```
+
+Over WiFi it polls `http://<esp32-ip>/data`, which returns the latest readings as JSON
+(`{"seq":..,"ok":true,"cell1":..,"cell2":..,"threshold1":..,"threshold2":..}`). The PC must be
+on the same network as the ESP32.
 
 It prints the mean and standard deviation of every 100 readings per cell.
 
