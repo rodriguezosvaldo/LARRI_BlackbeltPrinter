@@ -107,22 +107,27 @@ tracked files.
 
 Note the directory name has a space (`load cel`) — quote it in shell commands.
 
-- **`hx711/`** — PlatformIO project (`env:esp32dev`, Arduino framework, `bogde/HX711` lib,
-  115200 baud). `src/main.cpp` reads two HX711 amplifiers (cell 1: DOUT 21 / SCK 22; cell 2:
-  DOUT 18 / SCK 19) every 2s (non-blocking `millis()` timer, not `delay()`, so the web server
+- **`hx711/`** — PlatformIO project (`env:esp32-s3`, board ESP32-S3-WROOM-1; the old
+  `esp32dev` env and pins are kept commented out; Arduino framework, `bogde/HX711` lib,
+  115200 baud). `src/main.cpp` reads two HX711 amplifiers (cell 1: DOUT 17 / SCK 18; cell 2:
+  DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3, they are native USB) every 2s (non-blocking `millis()` timer, not `delay()`, so the web server
   stays responsive), prints `HX711 #<n> reading: <raw>` over serial, serves the latest readings
-  as JSON at `GET http://<esp32-ip>/data` (`seq`, `ok`, `cell1`, `cell2`, `threshold1/2`; the IP
-  is printed over serial once WiFi connects), and POSTs an ntfy alert when a raw reading drops below `CELL{1,2}_LOW_THRESHOLD` for 3 polls. A
-  `cellN_notified` flag prevents repeat alerts until the reading goes back above the
-  threshold. Thresholds are raw HX711 counts (no tare/scale factor applied) and must be tuned
+  as JSON at `GET http://<esp32-ip>/data` (`seq`, `ok`, `cell1`, `cell2`, `threshold1`/`threshold2` (2 h levels), `threshold1_1h`/`threshold2_1h`; the IP
+  is printed over serial once WiFi connects), and POSTs an ntfy alert when a raw reading stays below a threshold for 3 consecutive polls
+  (`checkLow()` on a `LowAlert` struct). Each cell has two levels, `CELLn_LOW_THRESHOLD_2HOURSLEFT`
+  (~50 m) and `CELLn_LOW_THRESHOLD_1HOURLEFT` (~25 m), derived from counts/m (cell 1 ~530, cell 2
+  ~636) and a reference reading (cell 1 full spool, cell 2 empty reel); see the comments in
+  `main.cpp`. Each level's `notified` flag prevents repeat
+  alerts until the reading goes back above its threshold. Thresholds are raw HX711 counts (no tare/scale factor applied) and must be tuned
   per cell.
 - **`hx711/include/secrets.h`** (gitignored) — must define `WIFI_SSID`, `WIFI_PASS`,
   `P1_NTFY_URL`, `P2_NTFY_URL`. Currently `main.cpp` sends both cells' alerts to
   `P1_NTFY_URL`. Never commit or echo this file's contents.
-- **`calibration.py`** — `python calibration.py [COM_PORT | <esp32-ip> | http://<esp32-ip>]`
-  (default: WiFi from `P2_IP` = `192.168.1.226`): reads over serial, or over WiFi by polling `/data` (skips repeated `seq`).
-  Parses the serial output format above and prints mean / std-dev per cell every 100 readings
-  (also appended to `load cel/calibration_cell<N>.log`), for picking
+- **`calibration.py`** — `python calibration.py [p1[=SOURCE]] [p2[=SOURCE]]`, SOURCE = COM port
+  or ESP32 IP/URL (default: both printers over WiFi, `P1_IP` = `192.168.1.132`, `P2_IP` =
+  `192.168.1.226`). One reader thread per printer (serial, or WiFi polling `/data`, skipping repeated `seq`)
+  feeds a shared queue. Parses the serial output format above and prints mean / std-dev per printer/cell every 100 readings
+  (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`), for picking
   thresholds. If you change the serial print format in `main.cpp`, update the regex here too.
 - `hx711/.pio/` is PlatformIO build output/library cache — don't edit.
 

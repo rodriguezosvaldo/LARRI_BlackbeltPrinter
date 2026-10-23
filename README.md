@@ -115,10 +115,13 @@ library*), and open the IP printed on the serial monitor.
 An ESP32 reads two load cells (one under each printer's spool) through HX711 amplifiers and
 sends an ntfy alert when a spool's weight drops below a threshold.
 
+Board: ESP32-S3-WROOM-1 (PlatformIO `env:esp32-s3`). The old classic-ESP32 env and pins are
+kept commented out in `platformio.ini` and `main.cpp`.
+
 | Cell | HX711 DOUT | HX711 SCK |
 |------|-----------|-----------|
-| 1    | GPIO 21   | GPIO 22   |
-| 2    | GPIO 18   | GPIO 19   |
+| 1    | GPIO 17   | GPIO 18   |
+| 2    | GPIO 15   | GPIO 16   |
 
 ### Firmware (`load cel/hx711/`, PlatformIO)
 
@@ -140,21 +143,26 @@ sends an ntfy alert when a spool's weight drops below a threshold.
    ```
 
 The firmware reads both cells every 2 s, prints `HX711 #<n> reading: <value>` over serial,
-and sends a high-priority alert after 3 low readings. It won't alert again for that cell
-until the reading goes back above the threshold (i.e. a new spool is loaded).
+and sends an alert after 3 consecutive low readings. Each cell has two levels: ~2 h left (~50 m,
+high priority) and ~1 h left (~25 m, urgent). Each level alerts once and won't alert again
+until the reading goes back above its threshold (i.e. a new spool is loaded).
 
 ### Calibration
 
-Thresholds (`CELL1_LOW_THRESHOLD`, `CELL2_LOW_THRESHOLD` in `src/main.cpp`) are raw HX711
-counts. To pick them, put a nearly-empty spool on each cell and run:
+Thresholds (`CELL{1,2}_LOW_THRESHOLD_2HOURSLEFT` / `_1HOURLEFT` in `src/main.cpp`) are raw
+HX711 counts, computed from each cell's counts per meter of filament (cell 1 ~530, cell 2 ~636,
+fitted against a print's extrusion CSV) and a reference reading (cell 1: full spool; cell 2:
+empty reel). A 4 kg spool is ~1350 m. To pick them, put a nearly-empty spool on each cell and run:
 
 ```bash
-python "load cel/calibration.py" COM3             # over serial (your ESP32's port)
-python "load cel/calibration.py" 192.168.1.50     # over WiFi (IP printed on serial at boot)
+python "load cel/calibration.py"                  # both printers (P1 and P2) over WiFi
+python "load cel/calibration.py" p1               # only P1 over WiFi
+python "load cel/calibration.py" p1=COM3 p2       # P1 over serial (your ESP32's port), P2 over WiFi
+python "load cel/calibration.py" p2=192.168.1.50  # P2 from another IP (printed on serial at boot)
 ```
 
 Over WiFi it polls `http://<esp32-ip>/data`, which returns the latest readings as JSON
-(`{"seq":..,"ok":true,"cell1":..,"cell2":..,"threshold1":..,"threshold2":..}`). The PC must be
+(`{"seq":..,"ok":true,"cell1":..,"cell2":..,"threshold1":..,"threshold1_1h":..,"threshold2":..,"threshold2_1h":..}`). The PC must be
 on the same network as the ESP32.
 
 It prints the mean and standard deviation of every 100 readings per cell.

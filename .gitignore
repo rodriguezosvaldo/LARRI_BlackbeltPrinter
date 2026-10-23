@@ -5,4 +5,4 @@ __pycache__/
 logs/
 load cel/hx711/include/secrets.h
 dht22_secrets.h
-load cel/calibration_cell*.log
+load cel/calibration_*.log

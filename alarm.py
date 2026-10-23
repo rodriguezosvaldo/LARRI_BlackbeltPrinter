@@ -26,7 +26,7 @@ NTFY2 = os.getenv("NTFY2")
 # ============================ Config ============================
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 
-TOTAL_FILAMENT_LENGTH = 1498000 # mm - New filanent (4kg)
+TOTAL_FILAMENT_LENGTH = 1350000 # mm - New filament (4kg), measured with load cell 2 (2026-10-23)
 FILAMENT_LEFT_ALERT = 20000 # mm - 20 meters
 raw_extrusion_reference1 = 0 # mm
 raw_extrusion_reference2 = 0 # mm
