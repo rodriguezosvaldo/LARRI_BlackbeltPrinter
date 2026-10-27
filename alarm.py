@@ -24,7 +24,11 @@ NTFY2 = os.getenv("NTFY2")
 # ============================ Config ============================
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 
-# Filament-low alerts are handled by the load cells (load cel/), not here.
+# Filament time left comes from the spool monitor (load cel/spool_monitor.py, load cells)
+SPOOL_API = os.getenv("SPOOL_API", "http://localhost:5051/api/spools")
+FILAMENT_LOW_HOURS = 2.0    # alert when a spool has less than this left
+FILAMENT_CLEAR_HOURS = 2.5  # re-arm the alert above this (new spool), avoids flapping near 2 h
+
 FILAMENT_DIAMETER = 1.75 # mm - for volumetric rate (mm3 per mm of filament)
 RATE_WINDOW = 600 # seconds - rolling window for the per-sample consumption rate
 
@@ -159,6 +163,15 @@ def get_layer(printer_ip: str):
         return r.json().get("result")
     except Exception as e:
         print(f"[get_layer error] {printer_ip}: {e}")
+        return None
+
+def get_spools() -> dict:
+    try:
+        r = requests.get(SPOOL_API, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.json().get("printers")
+    except Exception as e:
+        print(f"[get_spools error] {SPOOL_API}: {e}")
         return None
 
 # ============================ Helpers ============================
@@ -437,6 +450,41 @@ def check_job_log(printer_ip: str, status: str) -> None:
     _job_log_sample(log, job.get("rawExtrusion"), status, now)
 
 
+def check_filament_time(printer_ip: str, spools: dict, status: str, ntfy: str) -> None:
+    # Alert once per spool when the spool monitor's time left drops below FILAMENT_LOW_HOURS
+    if not spools:
+        return
+    key = "p1" if printer_ip == PRINTER1_IP else "p2"
+    printer = spools.get(key) or {}
+    if not printer.get("online"):
+        return
+    for cell, v in (printer.get("cells") or {}).items():
+        if v.get("consuming"):
+            hours = v.get("hours_left_live")
+        elif v.get("live_rate") is None and status in PRINTING_STATES:
+            # spool monitor still collecting data (< 10 min): use the reference rate
+            hours = v.get("hours_left_ref")
+        else:
+            continue  # idle spool: keep the alert state as is
+        if hours is None:
+            continue
+        problem = f"filament_low:{cell}"
+        if hours < FILAMENT_LOW_HOURS:
+            minutes = round(hours * 60)
+            notify_once(
+                printer_ip,
+                problem,
+                "Filament Low",
+                f"{_printer_label(printer_ip)} {cell}\n"
+                f"Time left: {minutes // 60}h {minutes % 60:02d}min",
+                priority="high",
+                tags="warning",
+                ntfy=ntfy,
+            )
+        elif hours > FILAMENT_CLEAR_HOURS:
+            clear_problem_notification(printer_ip, problem)
+
+
 def check_layer(printer_ip: str) -> None:
     prev = _prev(printer_ip)
     layer = get_layer(printer_ip)
@@ -454,13 +502,17 @@ def main() -> None:
 
     def loop_check_state() -> None:
         while True:
+            spools = get_spools()
+
             check_layer(PRINTER1_IP)
             status1 = check_state_status(PRINTER1_IP, NTFY1)
             check_job_log(PRINTER1_IP, status1)
+            check_filament_time(PRINTER1_IP, spools, status1, NTFY1)
 
             check_layer(PRINTER2_IP)
             status2 = check_state_status(PRINTER2_IP, NTFY2)
             check_job_log(PRINTER2_IP, status2)
+            check_filament_time(PRINTER2_IP, spools, status2, NTFY2)
 
             time.sleep(REQUEST_TEN_SECONDS)
         
