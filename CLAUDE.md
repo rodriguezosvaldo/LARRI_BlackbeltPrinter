@@ -48,13 +48,12 @@ Two daemon-ish threads run forever in `main()`, plus a Flask server thread:
 - **`loop_check_seqs_reply`** (every `REQUEST_REPLY` = 0.5s): polls `seqs.reply` on the Duet
   object model to detect *new* M118/error/warning messages (`check_reply`). Polled fast
   because the firmware only exposes the latest reply for ~1s.
-- **`loop_check_extrusion_and_state`** (every `REQUEST_TEN_SECONDS` = 10s): checks filament
-  remaining (`check_raw_extrusion`, against `TOTAL_FILAMENT_LENGTH` / `FILAMENT_LEFT_ALERT`),
-  current layer (`check_layer`), and print state (`check_state_status`), for both printers in
-  sequence.
-- **Flask app** (`_run_web_server`, port 5050): exposes `GET /api/status` (dumps `ui_state`)
-  and `POST /api/reset-reference/<1|2>` (zeroes the filament-used counter after a spool
-  change), backing `static/index.html`'s live dashboard.
+- **`loop_check_state`** (every `REQUEST_TEN_SECONDS` = 10s): checks current layer
+  (`check_layer`), print state (`check_state_status`) and the job log (`check_job_log`), for
+  both printers in sequence. Filament-low alerts are *not* done here (removed 2026-10-27);
+  they belong to the load cells (`load cel/`).
+- **Flask app** (`_run_web_server`, port 5050): exposes `GET /api/status` (dumps `ui_state`),
+  backing `static/index.html`'s live dashboard.
 
 Key patterns to preserve when editing:
 
@@ -62,15 +61,15 @@ Key patterns to preserve when editing:
   value against a per-printer `_prev()` dict and only notifies on a *transition* (e.g.
   `processing -> paused`), not on every poll. Update `prev[...]` even when not notifying, or
   edge detection breaks.
-- **`notify_once()` de-dupe**: for problems that recur every poll (filament low, new M118
+- **`notify_once()` de-dupe**: for problems that recur every poll (e.g. a new M118
   message), don't call `notify()` directly — route through `notify_once(printer_ip,
   problem_key, ...)`. It sends a single alert, then stays silent for that key until
   `clear_problem_notification()` is called (when the condition clears).
 - **`ui_state`/`ui_lock`**: the web UI reads a shared dict guarded by `ui_lock`. Any new
   per-printer value that should show up in the dashboard needs to flow through `_update_ui()`
-  under the lock, mirroring `raw_extrusion`/`layer`/`state_status`.
+  under the lock, mirroring `layer`/`state_status`.
 - **Duet object model access**: all printer reads go through `GET {printer_ip}/rr_model?key=...`
-  (see `get_raw_extrusion`, `get_state_status`, `get_layer`, `get_seqs_reply`). See
+  (see `get_job`, `get_state_status`, `get_layer`, `get_seqs_reply`). See
   `GCODE_CHEATSHEET.md` and the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
   for available keys, and `PRINTING_STATES`/`STOPPED_STATES` in `alarm.py` for the state
   vocabulary.

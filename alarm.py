@@ -26,10 +26,7 @@ NTFY2 = os.getenv("NTFY2")
 # ============================ Config ============================
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 
-TOTAL_FILAMENT_LENGTH = 1565000 # mm - New 4 kg spool: (full - empty reel) / counts_per_m on p1_cell1 (1572 m) and p2_cell1 (1562 m), 2026-10-27
-FILAMENT_LEFT_ALERT = 50000 # mm - 50 meters ( at 24m/h, get the alert ~2h before the end of the spool)
-raw_extrusion_reference1 = 0 # mm
-raw_extrusion_reference2 = 0 # mm
+# Filament-low alerts are handled by the load cells (load cel/), not here.
 FILAMENT_DIAMETER = 1.75 # mm - for volumetric rate (mm3 per mm of filament)
 RATE_WINDOW = 600 # seconds - rolling window for the per-sample consumption rate
 
@@ -43,16 +40,12 @@ ui_state = {
         "ip": PRINTER1_IP,
         "label": "",
         "state_status": None,
-        "raw_extrusion": None,
-        "raw_extrusion_reference": 0,
         "layer": None,
     },
     "printer2": {
         "ip": PRINTER2_IP,
         "label": "",
         "state_status": None,
-        "raw_extrusion": None,
-        "raw_extrusion_reference": 0,
         "layer": None,
     },
 }
@@ -150,19 +143,6 @@ def get_reply(printer_ip: str) -> str:
     except Exception:
         return ""
 
-def get_raw_extrusion(printer_ip: str) -> float:
-    try:
-        r = requests.get(
-            f"{printer_ip}/rr_model", 
-            params={"key": "job.rawExtrusion", "flags": "d99nfo"}, 
-            timeout=REQUEST_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json().get("result")
-    except Exception as e:
-        print(f"[get_raw_extrusion error] {printer_ip}: {e}")
-        return None
-
 def get_state_status(printer_ip: str) -> str:
     try:
         r = requests.get(
@@ -235,31 +215,13 @@ def _init_ui_state() -> None:
             ui_state[key]["label"] = _printer_label(ip) if ip else key
 
 
-def _update_ui(printer_ip: str, *, state_status=None, raw_extrusion=None, layer=_UI_UNSET) -> None:
+def _update_ui(printer_ip: str, *, state_status=None, layer=_UI_UNSET) -> None:
     key = _printer_ui_key(printer_ip)
-    ref = raw_extrusion_reference1 if key == "printer1" else raw_extrusion_reference2
     with ui_lock:
         if state_status is not None:
             ui_state[key]["state_status"] = state_status
-        if raw_extrusion is not None:
-            ui_state[key]["raw_extrusion"] = raw_extrusion
         if layer is not _UI_UNSET:
             ui_state[key]["layer"] = layer
-        ui_state[key]["raw_extrusion_reference"] = ref
-
-
-def reset_raw_extrusion_reference(printer_num: int) -> bool:
-    global raw_extrusion_reference1, raw_extrusion_reference2
-    printer_ip = PRINTER1_IP if printer_num == 1 else PRINTER2_IP
-    current = get_raw_extrusion(printer_ip)
-    if current is None:
-        return False
-    if printer_num == 1:
-        raw_extrusion_reference1 = current
-    else:
-        raw_extrusion_reference2 = current
-    _update_ui(printer_ip, raw_extrusion=current)
-    return True
 
 # ====================== Previous state (edge detection) ======================
 def _default_prev() -> dict:
@@ -306,32 +268,6 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
                 )
                 save_last_reply(printer_ip, reply)
             prev["seqs_reply"] = seqs_reply
-
-def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: float) -> None:
-    raw_extrusion = get_raw_extrusion(printer_ip)
-    _update_ui(printer_ip, raw_extrusion=raw_extrusion)
-    if raw_extrusion is not None:
-        if raw_extrusion > TOTAL_FILAMENT_LENGTH and raw_extrusion_reference == 0:
-            raw_extrusion = raw_extrusion - TOTAL_FILAMENT_LENGTH
-        extrusion_from_reference = raw_extrusion - raw_extrusion_reference
-        filament_left = TOTAL_FILAMENT_LENGTH - extrusion_from_reference
-        key_filament = "filament_low"
-        if filament_left < FILAMENT_LEFT_ALERT:
-            left = max(filament_left, 0)
-            message = f"{_printer_slug(printer_ip)}\n~{left / 1000:.0f} meters filament left"
-            rate = _job_rate_mm_min(_prev(printer_ip)["job_log"])
-            if rate:
-                message += f"\n~{_fmt_time_left(left / rate * 60)} left"
-            notify_once(
-                printer_ip,
-                key_filament,
-                "Filament Low",
-                message,
-                tags="warning",
-                ntfy=ntfy,
-            )
-        else:
-            clear_problem_notification(printer_ip, key_filament)
 
 def check_state_status(printer_ip: str, ntfy: str) -> str:
     # state.status: main indicator of pause/stop/halt (edge detection)
@@ -486,26 +422,6 @@ def _job_log_sample(log: dict, raw, status: str, now: datetime) -> None:
         print(f"[job csv error] {log['csv_path']}: {e}")
 
 
-def _job_rate_mm_min(log):
-    # Average extrusion rate of the current print (paused time excluded), None if unknown
-    if log is None or log["first_sample"] is None:
-        return None
-    active = log["last_time"] - log["first_sample"] - log["paused_total"]
-    if active < RATE_WINDOW or log["extruded"] <= 0:
-        return None
-    return log["extruded"] / active * 60
-
-
-def _fmt_time_left(seconds: float) -> str:
-    # Rounded for notifications: "2 hours", "1 hour", "40 minutes"
-    hours = seconds / 3600
-    if hours >= 1.5:
-        return f"{hours:.0f} hours"
-    if hours >= 0.75:
-        return "1 hour"
-    return f"{max(seconds / 60, 1):.0f} minutes"
-
-
 def _job_log_consumption(log: dict) -> None:
     # Average rate over printing time (paused time excluded) since the first sample
     if log["first_sample"] is None:
@@ -593,16 +509,6 @@ def api_status():
         return jsonify(ui_state)
 
 
-@app.post("/api/reset-reference/<int:printer_id>")
-def api_reset_reference(printer_id: int):
-    if printer_id not in (1, 2):
-        return jsonify({"ok": False, "error": "printer_id must be 1 or 2"}), 400
-    ok = reset_raw_extrusion_reference(printer_id)
-    if not ok:
-        return jsonify({"ok": False, "error": "could not read raw extrusion"}), 502
-    return jsonify({"ok": True})
-
-
 def _run_web_server() -> None:
     app.run(host=WEB_HOST, port=WEB_PORT, threaded=True, use_reloader=False)
 
@@ -620,14 +526,12 @@ def main() -> None:
             check_reply(PRINTER2_IP, NTFY2)
             time.sleep(REQUEST_REPLY)
 
-    def loop_check_extrusion_and_state() -> None:
+    def loop_check_state() -> None:
         while True:
-            check_raw_extrusion(PRINTER1_IP, NTFY1, raw_extrusion_reference1)
             check_layer(PRINTER1_IP)
             status1 = check_state_status(PRINTER1_IP, NTFY1)
             check_job_log(PRINTER1_IP, status1)
 
-            check_raw_extrusion(PRINTER2_IP, NTFY2, raw_extrusion_reference2)
             check_layer(PRINTER2_IP)
             status2 = check_state_status(PRINTER2_IP, NTFY2)
             check_job_log(PRINTER2_IP, status2)
@@ -639,11 +543,11 @@ def main() -> None:
         
 
     seqs_thread = threading.Thread(target=loop_check_seqs_reply, name="seqs-reply")
-    extrusion_and_state_thread = threading.Thread(target=loop_check_extrusion_and_state, name="extrusion-and-state")
+    state_thread = threading.Thread(target=loop_check_state, name="state")
     seqs_thread.start()
-    extrusion_and_state_thread.start()
+    state_thread.start()
     seqs_thread.join()
-    extrusion_and_state_thread.join()
+    state_thread.join()
 if __name__ == "__main__":
     main()
 

@@ -44,7 +44,6 @@
     .columns {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      min-height: 420px;
     }
 
     .column {
@@ -66,61 +65,12 @@
       word-break: break-all;
     }
 
-    .extrusion-panel {
-      flex: 1;
-      border: 1px solid #555;
-      border-radius: 12px;
-      padding: 1.25rem 1rem 1.5rem;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 1.25rem;
-    }
-
-    .data-lines {
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      padding: 0 0.5rem;
-    }
-
-    .data-lines span {
-      display: block;
-    }
-
     .value {
       color: #d8ffd8;
     }
 
     .value.muted {
       color: #888;
-    }
-
-    .btn-reset {
-      margin-top: auto;
-      background: #0a4d0a;
-      color: #fff;
-      border: 1px solid #fff;
-      border-radius: 10px;
-      padding: 0.55rem 1.75rem;
-      font-family: inherit;
-      font-size: 1.2rem;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    .btn-reset:hover {
-      background: #0d6b0d;
-    }
-
-    .btn-reset:active {
-      background: #083808;
-    }
-
-    .btn-reset:disabled {
-      opacity: 0.5;
-      cursor: wait;
     }
 
     @media (max-width: 700px) {
@@ -143,25 +93,11 @@
     <div class="columns">
       <section class="column" data-printer="1">
         <div class="status-box" id="status-1">—</div>
-        <div class="extrusion-panel">
-          <div class="data-lines">
-            <span>Raw Extrusion: <span class="value" id="raw-1">—</span></span>
-            <span>raw_extrusion_reference: <span class="value" id="ref-1">—</span></span>
-          </div>
-          <button class="btn-reset" data-printer="1">Reset reference</button>
-        </div>
         <div class="status-box">Current layer: <span class="value" id="layer-1">—</span></div>
       </section>
 
       <section class="column" data-printer="2">
         <div class="status-box" id="status-2">—</div>
-        <div class="extrusion-panel">
-          <div class="data-lines">
-            <span>Raw Extrusion: <span class="value" id="raw-2">—</span></span>
-            <span>raw_extrusion_reference: <span class="value" id="ref-2">—</span></span>
-          </div>
-          <button class="btn-reset" data-printer="2">Reset reference</button>
-        </div>
         <div class="status-box">Current layer: <span class="value" id="layer-2">—</span></div>
       </section>
     </div>
@@ -192,13 +128,6 @@
             : `${p.label || p.ip}: offline`;
           document.getElementById(`status-${num}`).textContent = statusText;
 
-          const rawEl = document.getElementById(`raw-${num}`);
-          rawEl.textContent = formatValue(p.raw_extrusion);
-          rawEl.classList.toggle("muted", p.raw_extrusion === null);
-
-          const refEl = document.getElementById(`ref-${num}`);
-          refEl.textContent = formatValue(p.raw_extrusion_reference);
-
           const layerEl = document.getElementById(`layer-${num}`);
           layerEl.textContent = formatValue(p.layer);
           layerEl.classList.toggle("muted", p.layer === null || p.layer === undefined);
@@ -207,20 +136,6 @@
         /* server may be starting */
       }
     }
-
-    async function resetReference(printerId, button) {
-      button.disabled = true;
-      try {
-        const res = await fetch(`/api/reset-reference/${printerId}`, { method: "POST" });
-        if (res.ok) await fetchStatus();
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    document.querySelectorAll(".btn-reset").forEach((btn) => {
-      btn.addEventListener("click", () => resetReference(btn.dataset.printer, btn));
-    });
 
     fetchStatus();
     setInterval(fetchStatus, 1000);

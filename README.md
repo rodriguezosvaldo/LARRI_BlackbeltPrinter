@@ -76,20 +76,15 @@ python alarm.py
 ```
 
 or double-click `run_alarm.bat` on Windows. Then open **http://localhost:5050** for the
-dashboard (live state, current layer and filament used for each printer).
+dashboard (live state and current layer for each printer).
 
-### Spool change
-
-The filament estimate is based on the total extruded length since the last reset, assuming a
-new 4 kg spool (`TOTAL_FILAMENT_LENGTH` in `alarm.py`). After loading a new spool, press the
-**Reset reference** button for that printer in the dashboard (or `POST /api/reset-reference/<1|2>`).
+Filament-low alerts are not handled here; they come from the load cells (`load cel/`).
 
 ### API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/api/status` | JSON with the current state of both printers |
-| `POST` | `/api/reset-reference/<1\|2>` | Reset the filament-used counter for a printer |
 
 ---
 
