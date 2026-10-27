@@ -1,0 +1,51 @@
+Load cell calibration results
+=============================
+Source: calibration_*.log (2026-10-23 16:23 -> 2026-10-27 08:50)
+Units: raw HX711 counts (no tare). The reading goes up with weight.
+Rate = counts/h the reading drops while printing (depends on the job).
+
+Cell        Empty reel    Rate (counts/h)   Full spool
+---------   -----------   ---------------   -----------
+p1_cell1        930,897            13,150     1,778,018
+p1_cell2         88,798            12,900     933,147
+p2_cell1        504,732            13,150     1,332,526
+p2_cell2       -315,248            13,860       542,885
+
+
+Per-cell details
+----------------
+p1_cell1 (printer 1, .243)
+  - Empty reel: 930,897 (the reel on it now, 10-26/27). Another reel measured on 10-24: 932,223.
+  - No reel: 724,913
+  - Rate: 12.6 h fit on 10-24. A slower job on the evening of 10-24 gave ~7,000.
+  - Full spool: new spool, 10-24 18:17, at rest.
+
+p1_cell2 (printer 1, .243)
+  - Empty reel: 88,798 (10-24 to 10-26).
+  - No reel: ~-112,445 (single sample).
+  - Rate: 17.6 h fit, 10-26/27.
+  - Full spool: PENDING. Weigh a new spool on this cell.
+
+p2_cell1 (printer 2, .188)
+  - Empty reel: 504,732 (10-24 to 10-26, after the spool ran out).
+  - No reel: 299,768
+  - Rate: 13,000-13,300 (prints on 10-24 and 10-26/27).
+  - Full spool: new spool, 10-26 16:19, at rest.
+
+p2_cell2 (printer 2, .188)
+  - Empty reel: -315,248 (one sample on 10-27 08:49, std 274). Matches -314,500 measured
+    on 10-23. The stretch at ~-431,000 (10-26 22:13 -> 10-27 08:46) is NOT the empty reel:
+    it is the end of the filament pulling on the reel (std ~2,670 vs ~270 at rest).
+  - No reel: -526,200 (earlier measurement).
+  - Rate: 55 h fit, 10-24 to 10-26.
+  - Full spool: 10-24 07:37, at rest, right before printing started.
+
+
+Notes
+-----
+- While printing, filament tension lowers the reading by ~10,000-20,000 counts.
+  The full and empty values above were measured at rest.
+- Full - empty gives ~1,560-1,570 m per spool (p1_cell1, p2_cell1), not 1,350 m.
+  alarm.py TOTAL_FILAMENT_LENGTH is now 1,565 m. The 636 counts/m for p2_cell2 assumed
+  1,350 m, so it is probably ~549 counts/m.
+- A reading below the empty reel should be counted as 0 m of filament.

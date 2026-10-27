@@ -26,8 +26,8 @@ NTFY2 = os.getenv("NTFY2")
 # ============================ Config ============================
 REQUEST_TIMEOUT = 10       # seconds per HTTP request
 
-TOTAL_FILAMENT_LENGTH = 1350000 # mm - New filament (4kg), measured with load cell 2 (2026-10-23)
-FILAMENT_LEFT_ALERT = 20000 # mm - 20 meters
+TOTAL_FILAMENT_LENGTH = 1565000 # mm - New 4 kg spool: (full - empty reel) / counts_per_m on p1_cell1 (1572 m) and p2_cell1 (1562 m), 2026-10-27
+FILAMENT_LEFT_ALERT = 50000 # mm - 50 meters ( at 24m/h, get the alert ~2h before the end of the spool)
 raw_extrusion_reference1 = 0 # mm
 raw_extrusion_reference2 = 0 # mm
 FILAMENT_DIAMETER = 1.75 # mm - for volumetric rate (mm3 per mm of filament)
@@ -317,13 +317,16 @@ def check_raw_extrusion(printer_ip: str, ntfy: str, raw_extrusion_reference: flo
         filament_left = TOTAL_FILAMENT_LENGTH - extrusion_from_reference
         key_filament = "filament_low"
         if filament_left < FILAMENT_LEFT_ALERT:
+            left = max(filament_left, 0)
+            message = f"{_printer_slug(printer_ip)}\n~{left / 1000:.0f} meters filament left"
+            rate = _job_rate_mm_min(_prev(printer_ip)["job_log"])
+            if rate:
+                message += f"\n~{_fmt_time_left(left / rate * 60)} left"
             notify_once(
                 printer_ip,
                 key_filament,
                 "Filament Low",
-                f"{_printer_slug(printer_ip)}\n"
-                f"Filament Consumed: {extrusion_from_reference:.2f} mm\n"
-                f"Filament Left: {filament_left:.2f} mm",
+                message,
                 tags="warning",
                 ntfy=ntfy,
             )
@@ -481,6 +484,26 @@ def _job_log_sample(log: dict, raw, status: str, now: datetime) -> None:
             )
     except Exception as e:
         print(f"[job csv error] {log['csv_path']}: {e}")
+
+
+def _job_rate_mm_min(log):
+    # Average extrusion rate of the current print (paused time excluded), None if unknown
+    if log is None or log["first_sample"] is None:
+        return None
+    active = log["last_time"] - log["first_sample"] - log["paused_total"]
+    if active < RATE_WINDOW or log["extruded"] <= 0:
+        return None
+    return log["extruded"] / active * 60
+
+
+def _fmt_time_left(seconds: float) -> str:
+    # Rounded for notifications: "2 hours", "1 hour", "40 minutes"
+    hours = seconds / 3600
+    if hours >= 1.5:
+        return f"{hours:.0f} hours"
+    if hours >= 0.75:
+        return "1 hour"
+    return f"{max(seconds / 60, 1):.0f} minutes"
 
 
 def _job_log_consumption(log: dict) -> None:

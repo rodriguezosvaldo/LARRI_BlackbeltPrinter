@@ -107,16 +107,21 @@ tracked files.
 
 Note the directory name has a space (`load cel`) — quote it in shell commands.
 
-- **`hx711/`** — PlatformIO project (`env:esp32-s3`, board ESP32-S3-WROOM-1; the old
-  `esp32dev` env and pins are kept commented out; Arduino framework, `bogde/HX711` lib,
+- Each printer has its own ESP32 + two HX711 + two load cells. P1 (.243) uses an ESP32-S3
+  (`env:esp32-s3`, pins below); P2 (.188) stays on a classic ESP32 (`esp32dev` env and pins
+  21/22, 18/19, kept commented out — switch to them to flash P2). Each ESP32 has a fixed IP
+  (`STATIC_IP` in `main.cpp`: P1 `192.168.1.132`, P2 `192.168.1.226`, must match `spools.json`);
+  switch that line too when flashing the other printer.
+- **`hx711/`** — PlatformIO project (currently set up for P1: Arduino framework, `bogde/HX711` lib,
   115200 baud). `src/main.cpp` reads two HX711 amplifiers (cell 1: DOUT 17 / SCK 18; cell 2:
   DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3, they are native USB) every 2s (non-blocking `millis()` timer, not `delay()`, so the web server
   stays responsive), prints `HX711 #<n> reading: <raw>` over serial, serves the latest readings
   as JSON at `GET http://<esp32-ip>/data` (`seq`, `ok`, `cell1`, `cell2`, `threshold1`/`threshold2` (2 h levels), `threshold1_1h`/`threshold2_1h`; the IP
   is printed over serial once WiFi connects), and POSTs an ntfy alert when a raw reading stays below a threshold for 3 consecutive polls
   (`checkLow()` on a `LowAlert` struct). Each cell has two levels, `CELLn_LOW_THRESHOLD_2HOURSLEFT`
-  (~50 m) and `CELLn_LOW_THRESHOLD_1HOURLEFT` (~25 m), derived from counts/m (cell 1 ~530, cell 2
-  ~636) and a reference reading (cell 1 full spool, cell 2 empty reel); see the comments in
+  (~50 m) and `CELLn_LOW_THRESHOLD_1HOURLEFT` (~25 m), derived from counts/m and the empty-reel reading
+  (per-cell table in `README.md`). Cells are named `p1_cell1`/`p1_cell2` (printer 1, .243) and
+  `p2_cell1`/`p2_cell2` (printer 2, .188); each printer has its own ESP32; see the comments in
   `main.cpp`. Each level's `notified` flag prevents repeat
   alerts until the reading goes back above its threshold. Thresholds are raw HX711 counts (no tare/scale factor applied) and must be tuned
   per cell.
@@ -129,6 +134,17 @@ Note the directory name has a space (`load cel`) — quote it in shell commands.
   feeds a shared queue. Parses the serial output format above and prints mean / std-dev per printer/cell every 100 readings
   (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`), for picking
   thresholds. If you change the serial print format in `main.cpp`, update the regex here too.
+- **`spool_monitor.py`** + `spool_monitor.html` — Flask page on port 5051 (separate from
+  `alarm.py`). One thread per printer polls the ESP32 `/data` (IPs and per-cell `full`/`empty`/
+  `ref_rate` in `spools.json`, reloaded on mtime change). `CellHistory` keeps the last
+  `RATE_WINDOW` (2 h) of readings; live rate = least-squares slope (counts/h, positive =
+  consuming), shown after `MIN_RATE_SPAN`; a jump > `JUMP_THRESHOLD` for `JUMP_CONFIRM`
+  readings = spool change, history reset. Time left = (current − empty) / rate, where
+  current = the fitted line's value now while consuming, or the last-minute mean when idle or
+  when the two differ by more than `FIT_MAX_DEVIATION`;
+  while consuming, `TENSION_OFFSET` (15k counts) is added to the reading first, since
+  filament tension lowers it during printing and `full`/`empty` are measured at rest.
+  Readings go to `logs/load_cells/<printer>_<date>.csv` and are reloaded at startup.
 - `hx711/.pio/` is PlatformIO build output/library cache — don't edit.
 
 ## `config.g/` and `macros/`

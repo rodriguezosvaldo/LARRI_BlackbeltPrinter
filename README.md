@@ -112,16 +112,17 @@ library*), and open the IP printed on the serial monitor.
 
 ## 3. Load-cell filament monitor (`load cel/`)
 
-An ESP32 reads two load cells (one under each printer's spool) through HX711 amplifiers and
-sends an ntfy alert when a spool's weight drops below a threshold.
+Each printer has its own set: one ESP32, two HX711 amplifiers and two load cells (one under
+each of that printer's two spools). The ESP32 sends an ntfy alert when a spool's weight drops
+below a threshold.
 
-Board: ESP32-S3-WROOM-1 (PlatformIO `env:esp32-s3`). The old classic-ESP32 env and pins are
-kept commented out in `platformio.ini` and `main.cpp`.
+| Printer | Board (PlatformIO env) | Cell 1 DOUT / SCK | Cell 2 DOUT / SCK |
+|---------|------------------------|-------------------|-------------------|
+| P1 (.243) | ESP32-S3-WROOM-1 (`esp32-s3`, active) | GPIO 17 / 18 | GPIO 15 / 16 |
+| P2 (.188) | classic ESP32 (`esp32dev`, commented out) | GPIO 21 / 22 | GPIO 18 / 19 |
 
-| Cell | HX711 DOUT | HX711 SCK |
-|------|-----------|-----------|
-| 1    | GPIO 17   | GPIO 18   |
-| 2    | GPIO 15   | GPIO 16   |
+`platformio.ini` and `main.cpp` are currently set up for P1. To flash P2, switch to the
+commented `esp32dev` env and P2 pins.
 
 ### Firmware (`load cel/hx711/`, PlatformIO)
 
@@ -150,9 +151,21 @@ until the reading goes back above its threshold (i.e. a new spool is loaded).
 ### Calibration
 
 Thresholds (`CELL{1,2}_LOW_THRESHOLD_2HOURSLEFT` / `_1HOURLEFT` in `src/main.cpp`) are raw
-HX711 counts, computed from each cell's counts per meter of filament (cell 1 ~530, cell 2 ~636,
-fitted against a print's extrusion CSV) and a reference reading (cell 1: full spool; cell 2:
-empty reel). A 4 kg spool is ~1350 m. To pick them, put a nearly-empty spool on each cell and run:
+HX711 counts: `threshold = empty_reel + counts_per_m × meters`, so meters left =
+`(reading − empty_reel) / counts_per_m`. A 4 kg spool is ~1565 m (measured on `p1_cell1` and
+`p2_cell1`, see `load cel/calibration_results.txt`).
+
+Cells are named `p1_cell1`, `p1_cell2` (printer 1, .243) and `p2_cell1`, `p2_cell2` (printer 2,
+.188); each printer has its own ESP32, whose `cell1`/`cell2` are that printer's cells.
+
+| Cell       | counts/m | Empty reel | Source |
+|------------|----------|------------|--------|
+| `p1_cell1` | ~538     | 932,225    | slope from print drop (13,100 counts/h); empty reel 2026-10-24 |
+| `p1_cell2` | pending  | 88,770     | empty reel 2026-10-23/24; slope = (full spool − 88,770) / 1565 |
+| `p2_cell1` | ~530     | pending    | fitted against a P2 print's extrusion CSV (P2 classic ESP32) |
+| `p2_cell2` | ~636     | −314,500   | fitted against a P2 print CSV; full spool +542,900 (P2 classic ESP32) |
+
+To measure a reference, put the spool (or empty reel) on the cell and run:
 
 ```bash
 python "load cel/calibration.py"                  # both printers (P1 and P2) over WiFi
@@ -166,6 +179,19 @@ Over WiFi it polls `http://<esp32-ip>/data`, which returns the latest readings a
 on the same network as the ESP32.
 
 It prints the mean and standard deviation of every 100 readings per cell.
+
+### Spool monitor (time left per spool)
+
+```bash
+python "load cel/spool_monitor.py"     # web page at http://localhost:5051
+```
+
+Polls both ESP32s (`/data`) and shows P1 and P2 side by side. For each cell: current reading,
+full spool, empty reel and reference rate (from `load cel/spools.json`, which is reloaded when
+edited), the **live rate** (least-squares slope of the last hour of readings, counts/h) and the
+**time left** = `(reading − empty) / rate`, with the estimated run-out time. The live rate
+resets itself when a spool is changed (jump of more than 50,000 counts). Readings are logged to
+`logs/load_cells/<p1|p2>_<date>.csv` and the last hour is reloaded on restart.
 
 ---
 

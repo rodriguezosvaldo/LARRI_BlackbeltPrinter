@@ -1,0 +1,39 @@
+{
+  "_help": "Raw HX711 counts (no tare). Reading goes UP with weight. ref_rate = counts/h the reading drops while printing (reference). null = not measured yet. Values from calibration_results.txt (2026-10-27). Reloaded automatically when this file changes.",
+  "p1": {
+    "label": "Printer 1 (243)",
+    "esp32": "192.168.1.132",
+    "cells": {
+      "cell1": {
+        "full": 1778018,
+        "empty": 930897,
+        "ref_rate": 13150,
+        "note": "empty = reel on it since 10-26 (other reel: 932,223)"
+      },
+      "cell2": {
+        "full": 933147,
+        "empty": 88798,
+        "ref_rate": 12900,
+        "note": "full ESTIMATED = empty + avg (full - empty) of other cells (844,349); weigh a new spool to confirm"
+      }
+    }
+  },
+  "p2": {
+    "label": "Printer 2 (188)",
+    "esp32": "192.168.1.226",
+    "cells": {
+      "cell1": {
+        "full": 1332526,
+        "empty": 504732,
+        "ref_rate": 13150,
+        "note": ""
+      },
+      "cell2": {
+        "full": 542885,
+        "empty": -315248,
+        "ref_rate": 13860,
+        "note": "empty from one sample (10-27 08:49), matches -314,500 from 10-23"
+      }
+    }
+  }
+}

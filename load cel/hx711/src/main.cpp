@@ -33,6 +33,15 @@ const int HX2_DOUT = 15;
 const int HX2_SCK  = 16;
 
 
+// --- Fixed IP (must match "esp32" in spools.json) ---
+// Uncomment the line of the printer you are flashing.
+const IPAddress STATIC_IP(192, 168, 1, 132);   // P1-243
+// const IPAddress STATIC_IP(192, 168, 1, 226);   // P2-188
+const IPAddress GATEWAY(192, 168, 1, 1);
+const IPAddress SUBNET(255, 255, 255, 0);
+const IPAddress DNS(192, 168, 1, 1);
+
+
 const unsigned long READ_INTERVAL_MS = 2000;
 const int LOW_READINGS_TO_ALERT = 3;  // consecutive low readings before alerting, to avoid false alarms
 
@@ -99,6 +108,10 @@ void setup() {
   scale1.begin(HX1_DOUT, HX1_SCK);
   scale2.begin(HX2_DOUT, HX2_SCK);
   WiFi.mode(WIFI_STA);
+  if (!WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS)) {
+    Serial.println("[wifi] static IP config failed, using DHCP");
+  }
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   server.on("/data", handleData);

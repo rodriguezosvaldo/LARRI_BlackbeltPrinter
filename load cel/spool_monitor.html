@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spool Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d0d0d;
+      --panel: #141414;
+      --line: #555;
+      --text: #f0f0f0;
+      --muted: #888;
+      --value: #d8ffd8;
+      --ok: #3fae5a;
+      --warn: #e0a030;
+      --bad: #e05050;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Patrick Hand", "Segoe Print", cursive;
+      font-size: 1.15rem;
+      display: flex;
+      justify-content: center;
+      padding: 1.5rem 1rem;
+    }
+
+    .dashboard {
+      width: min(1200px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .header {
+      border-bottom: 1px solid var(--line);
+      padding: 0.75rem 1rem;
+      text-align: center;
+      letter-spacing: 0.04em;
+    }
+
+    .header small { color: var(--muted); display: block; font-size: 0.95rem; }
+
+    .printers {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .printer { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
+    .printer + .printer { border-left: 1px solid var(--line); }
+
+    .printer-head {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.7rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      font-size: 0.95rem;
+      padding: 0.1rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+    }
+    .badge.online { color: var(--ok); }
+    .badge.offline { color: var(--bad); }
+
+    .cell {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .cell-title { display: flex; justify-content: space-between; align-items: baseline; }
+    .cell-title h3 { font-weight: normal; font-size: 1.35rem; }
+
+    .time-left {
+      text-align: center;
+      padding: 0.6rem 0.4rem;
+      border-radius: 10px;
+      background: #1c1c1c;
+    }
+    .time-left .big { font-size: 2rem; color: var(--value); line-height: 1.1; }
+    .time-left .big.warn { color: var(--warn); }
+    .time-left .big.bad { color: var(--bad); }
+    .time-left .big.muted { color: var(--muted); }
+    .time-left .sub { color: var(--muted); font-size: 0.95rem; }
+
+    .bar {
+      height: 10px;
+      border-radius: 5px;
+      background: #262626;
+      overflow: hidden;
+    }
+    .bar > div { height: 100%; width: 0; background: var(--ok); transition: width 0.4s; }
+
+    dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.25rem 1rem;
+    }
+    dt { color: var(--muted); }
+    dd { text-align: right; color: var(--value); font-variant-numeric: tabular-nums; }
+    dd.muted { color: var(--muted); }
+
+    .note { color: var(--muted); font-size: 0.9rem; }
+    .all-idle { text-align: center; padding: 1rem 0; }
+    [hidden] { display: none !important; }
+
+    @media (max-width: 800px) {
+      .printers { grid-template-columns: 1fr; }
+      .printer + .printer { border-left: none; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <header class="header">
+      Spool Monitor — <span id="clock">—</span>
+      <small id="window-info">Live rate = slope over the last hour</small>
+    </header>
+    <div class="printers" id="printers"></div>
+  </div>
+
+  <template id="printer-tpl">
+    <section class="printer">
+      <div class="printer-head">
+        <span class="p-label">—</span>
+        <span class="badge offline">offline</span>
+      </div>
+    </section>
+  </template>
+
+  <template id="cell-tpl">
+    <div class="cell">
+      <div class="cell-title"><h3 class="c-name">—</h3><span class="c-percent note">—</span></div>
+      <div class="bar"><div></div></div>
+      <div class="time-left">
+        <div class="big c-left">—</div>
+        <div class="sub c-left-sub">—</div>
+      </div>
+      <dl>
+        <dt>Current reading</dt><dd class="c-current">—</dd>
+        <dt>Empty reel</dt><dd class="c-empty">—</dd>
+        <dt>Live rate</dt><dd class="c-live">—</dd>
+        <dt>Reference rate</dt><dd class="c-ref">—</dd>
+      </dl>
+    </div>
+  </template>
+
+  <script>
+    const nums = (v, d = 0) =>
+      v === null || v === undefined ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: d });
+
+    function fmtHours(h) {
+      if (h === null || h === undefined) return "—";
+      const total = Math.round(h * 60);
+      const hh = Math.floor(total / 60), mm = total % 60;
+      return hh > 0 ? `${hh} h ${String(mm).padStart(2, "0")} min` : `${mm} min`;
+    }
+
+    // Date/time the spool runs out, e.g. "Today 18:40" or "Wed 29 Oct 22:25"
+    function fmtEta(h) {
+      if (h === null || h === undefined) return "—";
+      const t = new Date(Date.now() + h * 3600e3);
+      const sameDay = t.toDateString() === new Date().toDateString();
+      const time = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const day = t.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+      return sameDay ? `Today ${time}` : `${day} ${time}`;
+    }
+
+    function setVal(el, text, muted) {
+      el.textContent = text;
+      el.classList.toggle("muted", !!muted);
+    }
+
+    const built = {};
+
+    function build(key, label) {
+      const p = document.getElementById("printer-tpl").content.firstElementChild.cloneNode(true);
+      p.querySelector(".p-label").textContent = label;
+      const cells = {};
+      for (const c of ["cell1", "cell2"]) {
+        const el = document.getElementById("cell-tpl").content.firstElementChild.cloneNode(true);
+        el.querySelector(".c-name").textContent = `${key}_${c}`;
+        p.appendChild(el);
+        cells[c] = el;
+      }
+      const none = document.createElement("div");
+      none.className = "note all-idle";
+      none.textContent = "All spools idle";
+      p.appendChild(none);
+      document.getElementById("printers").appendChild(p);
+      built[key] = { root: p, cells };
+    }
+
+    function render(data) {
+      document.getElementById("clock").textContent = data.time;
+      document.getElementById("window-info").textContent =
+        `Live rate = slope over the last ${Math.round(data.rate_window / 60)} min ` +
+        `(needs ${Math.round(data.min_rate_span / 60)} min of data) · time left = (reading − empty) / rate`;
+
+      for (const [key, p] of Object.entries(data.printers)) {
+        if (!built[key]) build(key, p.label);
+        const { root, cells } = built[key];
+        root.querySelector(".p-label").textContent = `${p.label}${p.ip ? " · " + p.ip : ""}`;
+        const badge = root.querySelector(".badge");
+        badge.textContent = p.online ? "online" : "offline";
+        badge.className = `badge ${p.online ? "online" : "offline"}`;
+        badge.title = p.error || "";
+
+        let shown = 0;
+        for (const [c, v] of Object.entries(p.cells)) {
+          const el = cells[c];
+          const q = (s) => el.querySelector(s);
+
+          setVal(q(".c-empty"), nums(v.empty), v.empty === null);
+          setVal(q(".c-current"), nums(v.current), v.current === null);
+          setVal(q(".c-ref"), v.ref_rate ? `${nums(v.ref_rate)} /h` : "—", !v.ref_rate);
+          const live = v.live_rate === null
+            ? `collecting (${Math.round(v.live_span / 60)} min)`
+            : `${nums(v.live_rate)} /h` + (v.consuming ? "" : " (idle)");
+          setVal(q(".c-live"), live, !v.consuming);
+
+          // Headline: live estimate when consuming, else the reference one
+          // Idle = live rate known but below the consuming threshold: no countdown
+          // Idle cells are hidden
+          const idle = v.live_rate !== null && !v.consuming;
+          el.hidden = idle;
+          if (idle) continue;
+          shown++;
+          const h = v.consuming ? v.hours_left_live : v.hours_left_ref;
+          // Headline: when the spool runs out; below it, the time left
+          const big = q(".c-left");
+          big.textContent = fmtEta(h);
+          big.className = "big c-left " + (h === null ? "muted" : h < 1 ? "bad" : h < 2 ? "warn" : "");
+          let sub;
+          if (v.empty === null) sub = "empty reel not calibrated";
+          else if (v.current === null) sub = "no reading";
+          else if (h === null) sub = "no rate yet";
+          else {
+            const basis = v.consuming ? "at live rate" : "at reference rate (collecting live data)";
+            sub = `${fmtHours(h)} left · ${basis}`;
+          }
+          q(".c-left-sub").textContent = sub;
+
+          q(".c-percent").textContent = v.percent === null ? "" : `${nums(v.percent, 1)} %`;
+          const bar = q(".bar > div");
+          bar.style.width = `${v.percent ?? 0}%`;
+          bar.style.background = h !== null && h < 1 ? "var(--bad)" : h !== null && h < 2 ? "var(--warn)" : "var(--ok)";
+        }
+        root.querySelector(".all-idle").hidden = shown > 0;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch("/api/spools");
+        if (res.ok) render(await res.json());
+      } catch (_) { /* server restarting */ }
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
