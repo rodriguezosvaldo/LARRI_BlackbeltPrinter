@@ -9,7 +9,7 @@ expansion board, RepRapFirmware) at `192.168.1.243` (printer 1) and `192.168.1.1
 (printer 2). It has four mostly independent parts:
 
 1. **`alarm.py`** — the live Python service: polls both printers' HTTP object-model APIs,
-   sends push notifications via [ntfy](https://ntfy.sh), and serves a small status web UI.
+   sends push notifications via [ntfy](https://ntfy.sh), and writes per-print job logs.
 2. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
    heater-control web UI for the print environment. Unrelated to `alarm.py` at the code level.
 3. **`load cel/`** — ESP32 + two HX711 load cells (PlatformIO project) that weigh the filament
@@ -36,14 +36,13 @@ NTFY1=https://ntfy.sh/<topic1>
 NTFY2=https://ntfy.sh/<topic2>
 ```
 
-The web UI (status dashboard, `static/index.html`) is served at `http://localhost:5050` once
-`alarm.py` is running. Last printer replies are written under `logs/` (gitignored). There is
+`alarm.py` has no web UI (the old 5050 dashboard was removed 2026-10-27). Last printer replies are written under `logs/` (gitignored). There is
 no test suite, linter, or build step for the Python side. `requirements.txt` also includes
 `pyserial`, which is only used by `load cel/calibration.py` (serial mode).
 
 ## `alarm.py` architecture
 
-Two daemon-ish threads run forever in `main()`, plus a Flask server thread:
+Two threads run forever in `main()`:
 
 - **`loop_check_seqs_reply`** (every `REQUEST_REPLY` = 0.5s): polls `seqs.reply` on the Duet
   object model to detect *new* M118/error/warning messages (`check_reply`). Polled fast
@@ -52,8 +51,6 @@ Two daemon-ish threads run forever in `main()`, plus a Flask server thread:
   (`check_layer`), print state (`check_state_status`) and the job log (`check_job_log`), for
   both printers in sequence. Filament-low alerts are *not* done here (removed 2026-10-27);
   they belong to the load cells (`load cel/`).
-- **Flask app** (`_run_web_server`, port 5050): exposes `GET /api/status` (dumps `ui_state`),
-  backing `static/index.html`'s live dashboard.
 
 Key patterns to preserve when editing:
 
@@ -65,9 +62,6 @@ Key patterns to preserve when editing:
   message), don't call `notify()` directly — route through `notify_once(printer_ip,
   problem_key, ...)`. It sends a single alert, then stays silent for that key until
   `clear_problem_notification()` is called (when the condition clears).
-- **`ui_state`/`ui_lock`**: the web UI reads a shared dict guarded by `ui_lock`. Any new
-  per-printer value that should show up in the dashboard needs to flow through `_update_ui()`
-  under the lock, mirroring `layer`/`state_status`.
 - **Duet object model access**: all printer reads go through `GET {printer_ip}/rr_model?key=...`
   (see `get_job`, `get_state_status`, `get_layer`, `get_seqs_reply`). See
   `GCODE_CHEATSHEET.md` and the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
@@ -88,7 +82,7 @@ Key patterns to preserve when editing:
 
 `legacy_alarm.py` is a superset of `alarm.py`'s checks (stall detection, MCU temp, VIN,
 heater/filament-sensor faults) kept for reference — it is not run. When porting a check back
-in, follow `alarm.py`'s current conventions (`_update_ui`, `notify_once`), not the
+in, follow `alarm.py`'s current conventions (`_prev`, `notify_once`), not the
 legacy file's.
 
 ## `dht22.cpp` (ESP32 sketch)

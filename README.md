@@ -12,15 +12,14 @@ The project has four independent pieces:
 
 | Part | What it does | Runs on |
 |------|--------------|---------|
-| [`alarm.py`](alarm.py) + [`static/`](static/) | Polls both printers, sends push notifications, serves a status dashboard | PC on the printer network (Python) |
+| [`alarm.py`](alarm.py) | Polls both printers, sends push notifications, writes per-print logs | PC on the printer network (Python) |
 | [`dht22.cpp`](dht22.cpp) | Temperature/humidity monitoring and heater control for the print enclosure, with its own web UI | ESP32 |
 | [`load cel/`](load%20cel/) | Weighs the filament spools with load cells and alerts when a spool is running low | ESP32 + 2× HX711 |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
 
 ```
 BB_printer/
-├── alarm.py                 # printer monitor + ntfy alerts + web dashboard
-├── static/index.html        # dashboard served by alarm.py
+├── alarm.py                 # printer monitor + ntfy alerts + job logs
 ├── run_alarm.bat            # Windows launcher (uses .venv)
 ├── requirements.txt
 ├── legacy_alarm.py          # older, larger version of alarm.py (reference only, not run)
@@ -42,11 +41,11 @@ Polls each printer's Duet HTTP object model (`/rr_model`) and sends phone notifi
 through [ntfy](https://ntfy.sh) when:
 
 - a print **starts, finishes, pauses, is cancelled or halts** (state transitions),
-- the printer emits a **message, warning or error** (e.g. `M118` from a macro),
-- the **remaining filament** on the spool (estimated from total extrusion) drops below 20 m.
+- the printer emits a **message, warning or error** (e.g. `M118` from a macro).
 
-Repeating alerts are capped (2 notifications + a final "last notification") so your phone
-isn't spammed while a problem persists.
+Filament-low alerts are not handled here; they come from the load cells (`load cel/`).
+
+Repeating alerts are sent once per problem so your phone isn't spammed while it persists.
 
 ### Setup
 
@@ -75,16 +74,8 @@ isn't spammed while a problem persists.
 python alarm.py
 ```
 
-or double-click `run_alarm.bat` on Windows. Then open **http://localhost:5050** for the
-dashboard (live state and current layer for each printer).
-
-Filament-low alerts are not handled here; they come from the load cells (`load cel/`).
-
-### API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/status` | JSON with the current state of both printers |
+or double-click `run_alarm.bat` on Windows (it also starts the spool monitor on
+**http://localhost:5051**). Per-print logs and printer replies are written to `logs/`.
 
 ---
 

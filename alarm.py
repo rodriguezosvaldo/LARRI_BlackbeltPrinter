@@ -9,8 +9,6 @@ import time
 from collections import deque
 from datetime import datetime
 
-from flask import Flask, jsonify, send_from_directory
-
 load_dotenv()
 
 PRINTER1_IP = os.getenv("PRINTER1_IP")
@@ -29,26 +27,6 @@ REQUEST_TIMEOUT = 10       # seconds per HTTP request
 # Filament-low alerts are handled by the load cells (load cel/), not here.
 FILAMENT_DIAMETER = 1.75 # mm - for volumetric rate (mm3 per mm of filament)
 RATE_WINDOW = 600 # seconds - rolling window for the per-sample consumption rate
-
-WEB_HOST = "0.0.0.0"
-WEB_PORT = 5050
-
-ui_lock = threading.Lock()
-ui_state = {
-    "date_time": None,
-    "printer1": {
-        "ip": PRINTER1_IP,
-        "label": "",
-        "state_status": None,
-        "layer": None,
-    },
-    "printer2": {
-        "ip": PRINTER2_IP,
-        "label": "",
-        "state_status": None,
-        "layer": None,
-    },
-}
 
 REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
 REQUEST_TEN_SECONDS = 10   # check every 10 seconds
@@ -198,31 +176,6 @@ def _printer_label(printer_ip: str) -> str:
         return "Printer 2"
     return _printer_slug(printer_ip)
 
-
-def _printer_ui_key(printer_ip: str) -> str:
-    if printer_ip == PRINTER1_IP:
-        return "printer1"
-    return "printer2"
-
-
-_UI_UNSET = object()
-
-
-def _init_ui_state() -> None:
-    with ui_lock:
-        for key, ip in (("printer1", PRINTER1_IP), ("printer2", PRINTER2_IP)):
-            ui_state[key]["ip"] = ip
-            ui_state[key]["label"] = _printer_label(ip) if ip else key
-
-
-def _update_ui(printer_ip: str, *, state_status=None, layer=_UI_UNSET) -> None:
-    key = _printer_ui_key(printer_ip)
-    with ui_lock:
-        if state_status is not None:
-            ui_state[key]["state_status"] = state_status
-        if layer is not _UI_UNSET:
-            ui_state[key]["layer"] = layer
-
 # ====================== Previous state (edge detection) ======================
 def _default_prev() -> dict:
     return {
@@ -273,7 +226,6 @@ def check_state_status(printer_ip: str, ntfy: str) -> str:
     # state.status: main indicator of pause/stop/halt (edge detection)
     prev = _prev(printer_ip)
     status = get_state_status(printer_ip)
-    _update_ui(printer_ip, state_status=status)
     last = prev["status"]
     if status is not None and status != last and last is not None:
         slug = _printer_slug(printer_ip)
@@ -488,37 +440,11 @@ def check_job_log(printer_ip: str, status: str) -> None:
 def check_layer(printer_ip: str) -> None:
     prev = _prev(printer_ip)
     layer = get_layer(printer_ip)
-   
     prev["layer"] = layer
-    _update_ui(printer_ip, layer=layer)
-
-
-# ============================ Web UI ============================
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-app = Flask(__name__, static_folder=str(STATIC_DIR))
-
-
-@app.route("/")
-def index():
-    return send_from_directory(STATIC_DIR, "index.html")
-
-
-@app.get("/api/status")
-def api_status():
-    with ui_lock:
-        return jsonify(ui_state)
-
-
-def _run_web_server() -> None:
-    app.run(host=WEB_HOST, port=WEB_PORT, threaded=True, use_reloader=False)
 
 
 # ============================ Main ============================
 def main() -> None:
-    _init_ui_state()
-    web_thread = threading.Thread(target=_run_web_server, daemon=True)
-    web_thread.start()
-    print(f"Web UI: http://localhost:{WEB_PORT}")
     print(f"Checking {PRINTER1_IP} and {PRINTER2_IP}...")
     def loop_check_seqs_reply() -> None:
         while True:
@@ -535,9 +461,6 @@ def main() -> None:
             check_layer(PRINTER2_IP)
             status2 = check_state_status(PRINTER2_IP, NTFY2)
             check_job_log(PRINTER2_IP, status2)
-
-            with ui_lock:
-                ui_state["date_time"] = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
 
             time.sleep(REQUEST_TEN_SECONDS)
         
