@@ -6,7 +6,6 @@ from pathlib import Path
 import requests
 import math
 import time
-from collections import deque
 from datetime import datetime
 
 load_dotenv()
@@ -30,7 +29,6 @@ FILAMENT_LOW_HOURS = 2.0    # alert when a spool has less than this left
 FILAMENT_CLEAR_HOURS = 2.5  # re-arm the alert above this (new spool), avoids flapping near 2 h
 
 FILAMENT_DIAMETER = 1.75 # mm - for volumetric rate (mm3 per mm of filament)
-RATE_WINDOW = 600 # seconds - rolling window for the per-sample consumption rate
 
 REQUEST_REPLY = 0.5        # monitor seqs.reply, if changes get rr_reply which value is updated after ~1 seconds. So we need to check it every 0.5s
 REQUEST_TEN_SECONDS = 10   # check every 10 seconds
@@ -319,7 +317,6 @@ def _job_log_start(printer_ip: str, file_name: str, duration) -> dict:
         n += 1
     log = {
         "path": path,
-        "csv_path": path.with_suffix(".csv"),
         "file": file_name,
         "start": start,
         "pause_start": None,
@@ -329,7 +326,6 @@ def _job_log_start(printer_ip: str, file_name: str, duration) -> dict:
         "last_raw": None,
         "last_time": None,
         "extruded": 0.0,
-        "window": deque(),  # (time, extruded) while printing, for the rolling rate
     }
     _job_log_write(log, f"Job: {file_name}")
     _job_log_write(log, f"Printer: {_printer_label(printer_ip)} ({_printer_slug(printer_ip)})")
@@ -345,46 +341,18 @@ def _job_log_resume(log: dict, now: datetime) -> None:
     _job_log_write(log, f"RESUME  {_fmt_dt(now)}  (paused {_fmt_duration(paused)})")
 
 
-def _job_log_sample(log: dict, raw, status: str, now: datetime) -> None:
-    # One CSV row per poll: time, raw extrusion, state, rolling rate (mm/min)
+def _job_log_sample(log: dict, raw, now: datetime) -> None:
+    # Accumulate extruded filament for the END FILAMENT line (positive rawExtrusion deltas only;
+    # a drop means the firmware reset the counter)
     if raw is None:
         return
     t = now.timestamp()
     if log["first_sample"] is None:
         log["first_sample"] = t
-        try:
-            with open(log["csv_path"], "w", encoding="utf-8") as f:
-                f.write("timestamp,elapsed_s,state,raw_extrusion_mm,extruded_mm,rate_mm_min\n")
-        except Exception as e:
-            print(f"[job csv error] {log['csv_path']}: {e}")
     elif raw >= log["last_raw"]:
         log["extruded"] += raw - log["last_raw"]
-    else:
-        # rawExtrusion went backwards (firmware reset): restart the rolling window
-        log["window"].clear()
     log["last_raw"] = raw
     log["last_time"] = t
-
-    window = log["window"]
-    rate = None
-    if status in PRINTING_STATES:
-        window.append((t, log["extruded"]))
-        while window and t - window[0][0] > RATE_WINDOW:
-            window.popleft()
-        if len(window) >= 2 and t > window[0][0]:
-            rate = (log["extruded"] - window[0][1]) / (t - window[0][0]) * 60
-    else:
-        # Don't let pauses drag the rolling rate down
-        window.clear()
-
-    try:
-        with open(log["csv_path"], "a", encoding="utf-8") as f:
-            f.write(
-                f"{now:%Y-%m-%d %H:%M:%S},{t - log['first_sample']:.0f},{status},"
-                f"{raw:.2f},{log['extruded']:.2f},{'' if rate is None else f'{rate:.2f}'}\n"
-            )
-    except Exception as e:
-        print(f"[job csv error] {log['csv_path']}: {e}")
 
 
 def _job_log_consumption(log: dict) -> None:
@@ -393,11 +361,11 @@ def _job_log_consumption(log: dict) -> None:
         return
     active = log["last_time"] - log["first_sample"] - log["paused_total"]
     extruded = log["extruded"]
-    line = f"FILAMENT {extruded:.0f} mm"
+    line = f"FILAMENT CONSUMED {extruded / 1000:.2f} m"
     if active > 0:
-        rate = extruded / active * 60
+        rate = extruded / active * 3600  # mm/h
         area = math.pi * (FILAMENT_DIAMETER / 2) ** 2
-        line += f" | avg {rate:.2f} mm/min ({rate * area * 60 / 1000:.1f} cm3/h)"
+        line += f" | avg {rate / 1000:.2f} m/h ({rate * area / 1000:.1f} cm3/h)"
     _job_log_write(log, line)
 
 
@@ -447,7 +415,7 @@ def check_job_log(printer_ip: str, status: str) -> None:
     elif status not in PAUSED_STATES and log["pause_start"] is not None:
         _job_log_resume(log, now)
 
-    _job_log_sample(log, job.get("rawExtrusion"), status, now)
+    _job_log_sample(log, job.get("rawExtrusion"), now)
 
 
 def check_filament_time(printer_ip: str, spools: dict, ntfy: str) -> None:

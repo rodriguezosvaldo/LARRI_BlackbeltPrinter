@@ -77,10 +77,8 @@ Key patterns to preserve when editing:
   every PAUSE/RESUME (with pause length) and END (finished/cancelled/aborted, total and paused
   time). A job is detected by `job.file.fileName` being non-null; start time is
   `now - job.duration`, and the job ends when `fileName` goes null or changes.
-  Each job also gets a sibling `.csv` (`_job_log_sample`, one row per 10s poll: state, raw
-  extrusion, cumulative extruded mm, rolling `RATE_WINDOW` mm/min rate while printing). Extruded
-  length sums only positive `job.rawExtrusion` deltas (a drop = firmware reset). The END entry
-  adds a `FILAMENT` line (total mm, avg mm/min and cm³/h over non-paused time, using
+  `_job_log_sample` (every 10s poll) accumulates the extruded length, summing only positive `job.rawExtrusion` deltas (a drop = firmware reset). The END entry
+  adds a `FILAMENT CONSUMED` line (total m, avg m/h and cm³/h over non-paused time, using
   `FILAMENT_DIAMETER`).
 - Notification failures (`notify()`, `get_*` HTTP calls) are caught and logged to stdout, never
   raised — a printer being briefly unreachable must not kill the polling loops.
