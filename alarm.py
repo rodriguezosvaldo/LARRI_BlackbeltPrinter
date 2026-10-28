@@ -450,7 +450,7 @@ def check_job_log(printer_ip: str, status: str) -> None:
     _job_log_sample(log, job.get("rawExtrusion"), status, now)
 
 
-def check_filament_time(printer_ip: str, spools: dict, status: str, ntfy: str) -> None:
+def check_filament_time(printer_ip: str, spools: dict, ntfy: str) -> None:
     # Alert once per spool when the spool monitor's time left drops below FILAMENT_LOW_HOURS
     if not spools:
         return
@@ -459,13 +459,16 @@ def check_filament_time(printer_ip: str, spools: dict, status: str, ntfy: str) -
     if not printer.get("online"):
         return
     for cell, v in (printer.get("cells") or {}).items():
-        if v.get("consuming"):
-            hours = v.get("hours_left_live")
-        elif v.get("live_rate") is None and status in PRINTING_STATES:
-            # spool monitor still collecting data (< 10 min): use the reference rate
-            hours = v.get("hours_left_ref")
-        else:
-            continue  # idle spool: keep the alert state as is
+        # Only spools that are actually being consumed (live rate). No reference-rate
+        # fallback: alarm.py can't tell which of the two cells feeds the printer.
+        if not v.get("consuming"):
+            continue  # idle or no live rate yet: keep the alert state as is
+        current, empty = v.get("current"), v.get("empty")
+        if current is None or empty is None:
+            continue
+        if current + (v.get("tension_offset") or 0) <= empty:
+            continue  # empty reel or no reel on the cell
+        hours = v.get("hours_left_live")
         if hours is None:
             continue
         problem = f"filament_low:{cell}"
@@ -507,12 +510,12 @@ def main() -> None:
             check_layer(PRINTER1_IP)
             status1 = check_state_status(PRINTER1_IP, NTFY1)
             check_job_log(PRINTER1_IP, status1)
-            check_filament_time(PRINTER1_IP, spools, status1, NTFY1)
+            check_filament_time(PRINTER1_IP, spools, NTFY1)
 
             check_layer(PRINTER2_IP)
             status2 = check_state_status(PRINTER2_IP, NTFY2)
             check_job_log(PRINTER2_IP, status2)
-            check_filament_time(PRINTER2_IP, spools, status2, NTFY2)
+            check_filament_time(PRINTER2_IP, spools, NTFY2)
 
             time.sleep(REQUEST_TEN_SECONDS)
         

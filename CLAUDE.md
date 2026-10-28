@@ -52,9 +52,10 @@ Two threads run forever in `main()`:
   both printers in sequence, plus `check_filament_time`: it reads `SPOOL_API` (default
   `http://localhost:5051/api/spools`, served by `load cel/spool_monitor.py`) once per loop and
   sends one ntfy alert per cell (`notify_once`, key `filament_low:<cell>`) when time left <
-  `FILAMENT_LOW_HOURS` (2 h); re-armed above `FILAMENT_CLEAR_HOURS` (new spool). Uses
-  `hours_left_live` while consuming, `hours_left_ref` only if the printer is printing and the
-  monitor has no live rate yet; idle spools are skipped. If the spool monitor is down it just logs.
+  `FILAMENT_LOW_HOURS` (2 h); re-armed above `FILAMENT_CLEAR_HOURS` (new spool). Only cells with
+  `consuming` true are checked, using `hours_left_live` (no `hours_left_ref` fallback: it can't
+  tell which cell feeds the printer); cells reading at/below `empty` (+ `tension_offset`) are
+  skipped as empty reel / no reel. If the spool monitor is down it just logs.
 
 Key patterns to preserve when editing:
 
