@@ -176,7 +176,7 @@ Polls both ESP32s (`/data`) and shows P1 and P2 side by side. For each cell: cur
 full spool, empty reel and reference rate (from `load cel/spools.json`, which is reloaded when
 edited), the **live rate** (least-squares slope of the last hour of readings, counts/h) and the
 **time left** = `(reading − empty) / rate`, with the estimated run-out time. The live rate
-resets itself when a spool is changed (jump of more than 50,000 counts). Readings are logged to
+resets itself when a spool is changed (jump of more than 100,000 counts). Readings are logged to
 `logs/load_cells/<p1|p2>_<date>.csv` and the last hour is reloaded on restart.
 
 ---

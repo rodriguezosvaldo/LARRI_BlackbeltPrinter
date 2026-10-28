@@ -39,7 +39,7 @@ CURRENT_WINDOW = 60     # s - fallback "current" = mean of the last minute (prin
 # straight line (print start/stop, pause, tension step) and the last-minute mean is used.
 FIT_MAX_DEVIATION = 5000  # counts
 MIN_CONSUMING_RATE = 1000  # counts/h - below this the spool is considered idle (~2 m/h)
-JUMP_THRESHOLD = 50000  # counts - a jump this big vs. the recent median = spool changed/removed
+JUMP_THRESHOLD = 100000  # counts - a jump this big vs. the recent median = spool changed/removed
 JUMP_CONFIRM = 3        # consecutive jumped readings before resetting the history
 # While printing, filament tension pulls the reel up and lowers the reading by ~10k-20k counts.
 # full/empty in spools.json are measured at rest, so while consuming we add this back to the
