@@ -12,6 +12,8 @@ p2_cell1        504,732            13,150     1,332,526
 p2_cell2       -315,248            13,860       542,885
 
 
+Manual notes (kept when the file is regenerated)
+------------------------------------------------
 Per-cell details
 ----------------
 p1_cell1 (printer 1, .243)

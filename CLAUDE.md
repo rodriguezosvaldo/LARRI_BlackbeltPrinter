@@ -131,6 +131,10 @@ Note the directory name has a space (`load cel`) — quote it in shell commands.
   feeds a shared queue. Parses the serial output format above and prints mean / std-dev per printer/cell every 100 readings
   (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`), for picking
   thresholds. If you change the serial print format in `main.cpp`, update the regex here too.
+  `python calibration.py report [DIR]` (also run on Ctrl+C) rebuilds `calibration_results.txt` from the
+  logs: rest levels (low std, flat), auto-tagged empty reel / no reel / full spool from the jumps
+  between them, and the printing rate (least-squares over runs >= 1 h). Text below its
+  "Manual notes" marker is kept.
 - **`spool_monitor.py`** + `spool_monitor.html` — Flask page on port 5051 (separate from
   `alarm.py`). One thread per printer polls the ESP32 `/data` (IPs and per-cell `full`/`empty`/
   `ref_rate` in `spools.json`, reloaded on mtime change). `CellHistory` keeps the last
