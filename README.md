@@ -3,31 +3,35 @@
 Monitoring, alerting and configuration for the lab's two **BlackBelt 3D printers**
 (Duet 3 MB 6HC + 3HC expansion board, RepRapFirmware 3).
 
-| Printer | IP              | ntfy topic env var |
-|---------|-----------------|--------------------|
-| 1       | `192.168.1.243` | `NTFY1`            |
-| 2       | `192.168.1.188` | `NTFY2`            |
+| Printer | IP              | Its ESP32 (load cells + monitor) | ntfy topic |
+|---------|-----------------|----------------------------------|------------|
+| 1       | `192.168.1.243` | ESP32-S3, `192.168.1.132` (`bb-p1.local`) | `NTFY1` |
+| 2       | `192.168.1.188` | classic ESP32, `192.168.1.226` (`bb-p2.local`) | `NTFY2` |
 
-The project has four independent pieces:
+**Branch `all_in_esp32`:** each printer's ESP32 does all the monitoring by itself (alarms,
+spool monitor, dashboard). No PC is needed for alerts; a PC on the same network only stores
+the logs (`log_server.py`). The previous PC version (`alarm.py` + `load cel/spool_monitor.py`)
+is still in the repo for reference but is not run.
 
 | Part | What it does | Runs on |
 |------|--------------|---------|
-| [`alarm.py`](alarm.py) | Polls both printers, sends push notifications, writes per-print logs | PC on the printer network (Python) |
+| [`load cel/hx711/`](load%20cel/hx711/) | Printer monitor + ntfy alerts + job logs, load cells, time left per spool, web dashboard | One ESP32 per printer |
+| [`log_server.py`](log_server.py) | Receives the ESP32s' job logs, replies and load-cell CSVs into `logs/` | PC (optional) |
 | [`dht22.cpp`](dht22.cpp) | Temperature/humidity monitoring and heater control for the print enclosure, with its own web UI | ESP32 |
-| [`load cel/`](load%20cel/) | Weighs the filament spools with load cells and alerts when a spool is running low | ESP32 + 2× HX711 |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
 
 ```
 BB_printer/
-├── alarm.py                 # printer monitor + ntfy alerts + job logs
-├── run_alarm.bat            # Windows launcher (uses .venv)
-├── requirements.txt
-├── legacy_alarm.py          # older, larger version of alarm.py (reference only, not run)
+├── log_server.py            # PC log receiver for the ESP32s (stdlib only)
+├── run_log_server.bat       # Windows launcher
+├── alarm.py                 # previous PC printer monitor (reference, not run)
+├── legacy_alarm.py          # older, larger version of alarm.py (reference only)
 ├── dht22.cpp                # ESP32 enclosure temperature/humidity + heater controller
 ├── load cel/
+│   ├── hx711/               # PlatformIO project: the ESP32 firmware (monitor + load cells)
 │   ├── calibration.py       # serial/WiFi reader to calibrate load-cell thresholds
-│   ├── load_cell.png        # wiring/reference image
-│   └── hx711/               # PlatformIO project for the ESP32 + HX711 firmware
+│   ├── spool_monitor.py     # previous PC spool monitor (reference, not run)
+│   └── load_cell.png        # wiring/reference image
 ├── config.g/                # config.g for each printer
 ├── macros/                  # homing/jog macros and filament load/unload/pause/resume
 └── GCODE_CHEATSHEET.md      # G/M-codes used in the config and macros
@@ -35,47 +39,73 @@ BB_printer/
 
 ---
 
-## 1. Printer monitor (`alarm.py`)
+## 1. Printer monitor on the ESP32 (`load cel/hx711/`)
 
-Polls each printer's Duet HTTP object model (`/rr_model`) and sends phone notifications
-through [ntfy](https://ntfy.sh) when:
+Each ESP32 watches **its own printer** (P1's ESP32 → `.243`, P2's → `.188`) through the Duet
+HTTP object model (`/rr_model`) and its two load cells, and sends phone notifications through
+[ntfy](https://ntfy.sh) when:
 
-- a print **starts, finishes, pauses, is cancelled or halts** (state transitions),
-- the printer emits a **message, warning or error** (e.g. `M118` from a macro).
+- the printer **pauses, resumes, is cancelled/stops or halts** (state transitions),
+- the printer emits a **message, warning or error** (e.g. `M118` from a macro),
+- a spool that is being consumed has **less than 2 h of filament left** (once per spool,
+  re-armed above 2.5 h, i.e. a new spool).
 
-Filament-low alerts are not handled here; they come from the load cells (`load cel/`).
+| Printer | Board (PlatformIO env) | Cell 1 DOUT / SCK | Cell 2 DOUT / SCK |
+|---------|------------------------|-------------------|-------------------|
+| P1 (.243) | ESP32-S3-WROOM-1 (`p1`) | GPIO 17 / 18 | GPIO 15 / 16 |
+| P2 (.188) | classic ESP32 (`p2`) | GPIO 21 / 22 | GPIO 18 / 19 |
 
-Repeating alerts are sent once per problem so your phone isn't spammed while it persists.
+Calibration push button: GPIO 4 to GND on both boards.
 
 ### Setup
 
-1. Install Python 3.10+ and the dependencies:
+1. Copy `load cel/hx711/include/secrets.example.h` to `secrets.h` (gitignored) and fill in WiFi,
+   both ntfy topics and, if you want logs on a PC, `LOG_SERVER_URL` (`http://<pc-ip>:5052`).
+2. Build and upload with PlatformIO (VS Code extension or CLI), one environment per printer:
 
    ```bash
-   python -m venv .venv
-   .venv\Scripts\activate        # Windows  (source .venv/bin/activate on Linux/macOS)
-   pip install -r requirements.txt
-   ```
-
-2. Create a `.env` file in the repo root:
-
-   ```
-   PRINTER1_IP=http://192.168.1.243
-   PRINTER2_IP=http://192.168.1.188
-   NTFY1=https://ntfy.sh/<your-topic-for-printer-1>
-   NTFY2=https://ntfy.sh/<your-topic-for-printer-2>
+   cd "load cel/hx711"
+   pio run -e p1 -t upload -t monitor     # P1 ESP32
+   pio run -e p2 -t upload -t monitor     # P2 ESP32
    ```
 
 3. Subscribe to both topics in the ntfy app on your phone.
 
-### Run
+The serial monitor (115200 baud) prints the IP, every 10 s the printer state, the alerts sent
+and the job-log lines. The clock comes from NTP (US Eastern time), so the network needs
+internet access (also needed for ntfy).
+
+### Web pages (port 80 of either ESP32)
+
+| URL | What |
+|-----|------|
+| `/` | Dashboard: both printers (state, job, layer) and, per spool, run-out time, time left, %, readings and rates. The page also asks the other ESP32 for its data. |
+| `/config` | Per-cell `full` / `empty` / `ref_rate` / note (what `spools.json` used to hold) and the other ESP32's URL. Saved in the ESP32's flash. |
+| `/calib` | Calibration: 100 readings per cell -> mean / std dev (also with the push button). |
+| `/api/spools`, `/api/config`, `/data`, `/calibration` | JSON APIs |
+
+**Time left** = `(reading − empty) / rate`. The live rate is the least-squares slope of the last
+2 h of readings (shown after 10 min of data); while consuming, 15,000 counts are added to the
+reading to undo the filament tension. A jump of more than 100,000 counts = spool changed, the
+history restarts.
+
+### Logs on the PC (`log_server.py`)
 
 ```bash
-python alarm.py
+python log_server.py        # or run_log_server.bat; port 5052, standard library only
 ```
 
-or double-click `run_alarm.bat` on Windows (it also starts the spool monitor on
-**http://localhost:5051**). Per-print logs and printer replies are written to `logs/`.
+The ESP32s send to it (same files as before, in `logs/`):
+
+- one log per print: `p1_243_<date>_<job>.log` with START, every PAUSE/RESUME, FILAMENT
+  CONSUMED and END,
+- printer messages: `replies_<printer-ip>.jsonl`,
+- load-cell readings every 2 s: `load_cells/<p1|p2>_<date>.csv` (sent once a minute).
+
+If the PC is off, alerts and the dashboard keep working; the ESP32 keeps the logs in RAM and
+sends them later (load-cell rows: up to 2 h on P1, 1 h on P2). At boot the ESP32 reloads the
+last 2 h of readings from the PC so the live rate isn't lost. Give the PC a fixed IP (DHCP
+reservation) and allow Python through the Windows firewall on private networks.
 
 ---
 
@@ -96,53 +126,12 @@ library*), and open the IP printed on the serial monitor.
 
 ---
 
-## 3. Load-cell filament monitor (`load cel/`)
-
-Each printer has its own set: one ESP32, two HX711 amplifiers and two load cells (one under
-each of that printer's two spools). The ESP32 sends an ntfy alert when a spool's weight drops
-below a threshold.
-
-| Printer | Board (PlatformIO env) | Cell 1 DOUT / SCK | Cell 2 DOUT / SCK |
-|---------|------------------------|-------------------|-------------------|
-| P1 (.243) | ESP32-S3-WROOM-1 (`esp32-s3`, active) | GPIO 17 / 18 | GPIO 15 / 16 |
-| P2 (.188) | classic ESP32 (`esp32dev`, commented out) | GPIO 21 / 22 | GPIO 18 / 19 |
-
-`platformio.ini` and `main.cpp` are currently set up for P1. To flash P2, switch to the
-commented `esp32dev` env and P2 pins.
-
-### Firmware (`load cel/hx711/`, PlatformIO)
-
-1. Create `load cel/hx711/include/secrets.h` (gitignored):
-
-   ```cpp
-   #define WIFI_SSID   "<wifi-name>"
-   #define WIFI_PASS   "<wifi-password>"
-   #define P1_NTFY_URL "https://ntfy.sh/<topic-printer-1>"
-   #define P2_NTFY_URL "https://ntfy.sh/<topic-printer-2>"
-   ```
-
-2. Build and upload with PlatformIO (VS Code extension or CLI):
-
-   ```bash
-   cd "load cel/hx711"
-   pio run -t upload
-   pio device monitor        # 115200 baud
-   ```
-
-The firmware reads both cells every 2 s, prints `HX711 #<n> reading: <value>` over serial,
-and sends an alert after 3 consecutive low readings. Each cell has two levels: ~2 h left (~50 m,
-high priority) and ~1 h left (~25 m, urgent). Each level alerts once and won't alert again
-until the reading goes back above its threshold (i.e. a new spool is loaded).
-
-### Calibration
-
-Thresholds (`CELL{1,2}_LOW_THRESHOLD_2HOURSLEFT` / `_1HOURLEFT` in `src/main.cpp`) are raw
-HX711 counts: `threshold = empty_reel + counts_per_m × meters`, so meters left =
-`(reading − empty_reel) / counts_per_m`. A 4 kg spool is ~1565 m (measured on `p1_cell1` and
-`p2_cell1`, see `load cel/calibration_results.txt`).
+## 3. Load-cell calibration (`load cel/`)
 
 Cells are named `p1_cell1`, `p1_cell2` (printer 1, .243) and `p2_cell1`, `p2_cell2` (printer 2,
-.188); each printer has its own ESP32, whose `cell1`/`cell2` are that printer's cells.
+.188); each printer has its own ESP32, whose `cell1`/`cell2` are that printer's cells. Values
+are raw HX711 counts (no tare); the reading goes up with weight. A 4 kg spool is ~1565 m
+(measured on `p1_cell1` and `p2_cell1`, see `load cel/calibration_results.txt`).
 
 | Cell       | counts/m | Empty reel | Source |
 |------------|----------|------------|--------|
@@ -151,7 +140,8 @@ Cells are named `p1_cell1`, `p1_cell2` (printer 1, .243) and `p2_cell1`, `p2_cel
 | `p2_cell1` | ~530     | pending    | fitted against a P2 print's extrusion CSV (P2 classic ESP32) |
 | `p2_cell2` | ~636     | −314,500   | fitted against a P2 print CSV; full spool +542,900 (P2 classic ESP32) |
 
-To measure a reference, put the spool (or empty reel) on the cell and run:
+To measure a reference, put the spool (or empty reel) on the cell and either press the
+calibration button / open `/calib` on the ESP32, or run:
 
 ```bash
 python "load cel/calibration.py"                  # both printers (P1 and P2) over WiFi
@@ -160,24 +150,9 @@ python "load cel/calibration.py" p1=COM3 p2       # P1 over serial (your ESP32's
 python "load cel/calibration.py" p2=192.168.1.50  # P2 from another IP (printed on serial at boot)
 ```
 
-Over WiFi it polls `http://<esp32-ip>/data`, which returns the latest readings as JSON
-(`{"seq":..,"ok":true,"cell1":..,"cell2":..,"threshold1":..,"threshold1_1h":..,"threshold2":..,"threshold2_1h":..}`). The PC must be
-on the same network as the ESP32.
-
-It prints the mean and standard deviation of every 100 readings per cell.
-
-### Spool monitor (time left per spool)
-
-```bash
-python "load cel/spool_monitor.py"     # web page at http://localhost:5051
-```
-
-Polls both ESP32s (`/data`) and shows P1 and P2 side by side. For each cell: current reading,
-full spool, empty reel and reference rate (from `load cel/spools.json`, which is reloaded when
-edited), the **live rate** (least-squares slope of the last hour of readings, counts/h) and the
-**time left** = `(reading − empty) / rate`, with the estimated run-out time. The live rate
-resets itself when a spool is changed (jump of more than 100,000 counts). Readings are logged to
-`logs/load_cells/<p1|p2>_<date>.csv` and the last hour is reloaded on restart.
+Over WiFi it polls `http://<esp32-ip>/data` (`{"seq":..,"ok":true,"cell1":..,"cell2":..}`). It
+prints the mean and standard deviation of every 100 readings per cell. Then enter the new
+`full` / `empty` / `ref_rate` on the ESP32's `/config` page.
 
 ---
 
