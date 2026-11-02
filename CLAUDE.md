@@ -77,6 +77,10 @@ Key patterns to preserve when editing:
   every PAUSE/RESUME (with pause length) and END (finished/cancelled/aborted, total and paused
   time). A job is detected by `job.file.fileName` being non-null; start time is
   `now - job.duration`, and the job ends when `fileName` goes null or changes.
+  A new job also sends the "Print Started" ntfy (skipped on the first `get_job` after startup,
+  `job_polled`, so a print already running isn't announced) and clears the `m118:*`
+  `notify_once` keys, so repeated M118 messages alert once per print. `check_reply` skips the
+  firmware's "selected for printing" reply to avoid a duplicate alert.
   `_job_log_sample` (every 10s poll) accumulates the extruded length, summing only positive `job.rawExtrusion` deltas (a drop = firmware reset). The END entry
   adds a `FILAMENT CONSUMED` line (total m, avg m/h and cm³/h over non-paused time, using
   `FILAMENT_DIAMETER`).
