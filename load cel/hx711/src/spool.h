@@ -45,3 +45,13 @@ CellView spoolView(int cell, uint32_t now);
 String spoolPeerUrl();
 void spoolConfigJson(JsonObject out);
 bool spoolSetConfig(JsonVariantConst in, String& error);
+
+// Calibration result for one cell: the mean replaces empty or full if it is within
+// CALIB_MATCH_TOLERANCE of it (and the spool was at rest), then the config is saved to NVS.
+struct CalibUpdate {
+  const char* result = nullptr;  // "empty", "full", "no_match", "unstable", "printing"; null = none yet
+  bool changed = false;          // empty/full replaced
+  bool saved = false;            // written to NVS
+  long before = 0, after = 0;
+};
+CalibUpdate spoolCalibrate(int cell, double mean, double stdDev);

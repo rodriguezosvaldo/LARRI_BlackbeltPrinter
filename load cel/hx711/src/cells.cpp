@@ -35,6 +35,7 @@ struct CalibStats {
 enum CalibState { CALIB_IDLE, CALIB_RUNNING, CALIB_DONE, CALIB_CANCELLED };
 CalibState calibState = CALIB_IDLE;
 CalibStats calib1, calib2;
+CalibUpdate calibUpd[NUM_CELLS];  // what each cell's result did to empty/full
 unsigned long calibStartMs = 0;
 unsigned long calibEndMs = 0;
 
@@ -54,6 +55,23 @@ const char* calibStateName() {
   }
 }
 
+// Replaces the cell's empty or full with the calibration mean if it is close to it
+void calibApply(int cell, const CalibStats& s) {
+  CalibUpdate& u = calibUpd[cell];
+  u = spoolCalibrate(cell, s.mean, s.stdDev());
+  const char* r = u.result;
+  if (u.changed)
+    Serial.printf("[calib] cell %d: %s %ld -> %ld (%s)\n", cell + 1, r, u.before, u.after,
+                  u.saved ? "saved" : "NOT saved, flash error");
+  else if (!strcmp(r, "unstable"))
+    Serial.printf("[calib] cell %d: std dev above %.0f, not at rest, nothing saved\n", cell + 1, CALIB_MAX_STD);
+  else if (!strcmp(r, "printing"))
+    Serial.printf("[calib] cell %d: spool is being consumed, nothing saved\n", cell + 1);
+  else
+    Serial.printf("[calib] cell %d: mean not within %.0f of empty or full, nothing saved\n", cell + 1,
+                  CALIB_MATCH_TOLERANCE);
+}
+
 // Called after every good reading
 void calibAddReading(long reading1, long reading2) {
   if (calibState != CALIB_RUNNING) return;
@@ -66,6 +84,8 @@ void calibAddReading(long reading1, long reading2) {
                   CALIB_WINDOW, calib1.mean, calib1.stdDev());
     Serial.printf("[calib] cell 2 last %d readings -> mean: %.2f, std dev: %.2f\n",
                   CALIB_WINDOW, calib2.mean, calib2.stdDev());
+    calibApply(0, calib1);
+    calibApply(1, calib2);
   }
 }
 
@@ -84,8 +104,13 @@ void checkButton() {
   }
 }
 
-String cellJson(const CalibStats& c) {
-  return "{\"mean\":" + String(c.mean, 2) + ",\"std_dev\":" + String(c.stdDev(), 2) + "}";
+String cellJson(const CalibStats& c, const CalibUpdate& u) {
+  String s = "{\"mean\":" + String(c.mean, 2) + ",\"std_dev\":" + String(c.stdDev(), 2) + ",\"result\":";
+  s += u.result ? "\"" + String(u.result) + "\"" : String("null");
+  if (u.changed)
+    s += ",\"before\":" + String(u.before) + ",\"after\":" + String(u.after) +
+         ",\"saved\":" + (u.saved ? "true" : "false");
+  return s + "}";
 }
 
 void readCells() {
@@ -149,6 +174,7 @@ String cellsDataJson() {
 void calibStart() {
   calib1.reset();
   calib2.reset();
+  for (auto& u : calibUpd) u = CalibUpdate();
   calibStartMs = millis();
   calibState = CALIB_RUNNING;
   Serial.printf("[calib] started: %d readings per cell (~%lu s)\n",
@@ -169,7 +195,7 @@ String calibJson() {
          ",\"readings\":" + String(calib1.n) +
          ",\"window\":" + String(CALIB_WINDOW) +
          ",\"elapsed_s\":" + String(calibState == CALIB_IDLE ? 0 : (end - calibStartMs) / 1000) +
-         ",\"cell1\":" + cellJson(calib1) +
-         ",\"cell2\":" + cellJson(calib2) +
+         ",\"cell1\":" + cellJson(calib1, calibUpd[0]) +
+         ",\"cell2\":" + cellJson(calib2, calibUpd[1]) +
          "}";
 }

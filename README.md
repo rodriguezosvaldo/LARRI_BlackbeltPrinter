@@ -81,7 +81,7 @@ internet access (also needed for ntfy).
 |-----|------|
 | `/` | Dashboard: both printers (state, job, layer) and, per spool, run-out time, time left, %, readings and rates. The page also asks the other ESP32 for its data. |
 | `/config` | Per-cell `full` / `empty` / `ref_rate` / note (what `spools.json` used to hold) and the other ESP32's URL. Saved in the ESP32's flash. |
-| `/calib` | Calibration: 100 readings per cell -> mean / std dev (also with the push button). |
+| `/calib` | Calibration: 100 readings per cell -> mean / std dev (also with the push button). A mean within 100k counts of the saved empty reel / full spool replaces it (saved to flash). |
 | `/api/spools`, `/api/config`, `/data`, `/calibration` | JSON APIs |
 
 **Time left** = `(reading − empty) / rate`. The live rate is the least-squares slope of the last
@@ -141,7 +141,11 @@ are raw HX711 counts (no tare); the reading goes up with weight. A 4 kg spool is
 | `p2_cell2` | ~636     | −314,500   | fitted against a P2 print CSV; full spool +542,900 (P2 classic ESP32) |
 
 To measure a reference, put the spool (or empty reel) on the cell and either press the
-calibration button / open `/calib` on the ESP32, or run:
+calibration button / open `/calib` on the ESP32, or run `calibration.py` (below). The ESP32
+calibration (~200 s, spool at rest, not printing) updates the cell's `empty` or `full` by itself
+when the mean is within 100k counts of the saved value, and keeps it in flash (NVS) across
+reboots and reflashes; `config.h` only holds the starting values. A value further off (e.g. the
+estimated `full` of `p1_cell2`) has to be set once at `/config`.
 
 ```bash
 python "load cel/calibration.py"                  # both printers (P1 and P2) over WiFi

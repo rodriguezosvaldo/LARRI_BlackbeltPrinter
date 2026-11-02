@@ -84,7 +84,9 @@ slow/offline PC or ntfy never delays polling or the web page.
 - **`cells.cpp`**: HX711 reads every 2 s (non-blocking `millis()` timer), serial
   `HX711 #<n> reading: <raw>` (parsed by `calibration.py` — update its regex if this changes),
   on-board calibration (button GPIO 4 or `/calib`, Welford mean/std over `CALIB_WINDOW` = 100,
-  `[calib] ...` serial lines). Feeds `spoolAdd` and `pclogCells`.
+  `[calib] ...` serial lines). When done, `spoolCalibrate()` replaces the cell's `empty` or
+  `full` (closest within `CALIB_MATCH_TOLERANCE`, skipped if std > `CALIB_MAX_STD` or the cell
+  is consuming) and saves the config to NVS like `/config`. Feeds `spoolAdd` and `pclogCells`.
 - **`ntfy.cpp`**: `notify()` queues (adds the timestamp like `alarm.py`), `ntfyProcess()` sends
   over HTTPS (`setInsecure()`); failures are logged, never retried or raised.
 - **`pclog.cpp`**: queues for the PC (`/job`, `/reply` events in order; `/cells` rows once a

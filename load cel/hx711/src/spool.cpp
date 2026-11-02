@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "config.h"
+#include "util.h"
 
 namespace {
 
@@ -253,24 +254,67 @@ void spoolConfigJson(JsonObject out) {
   lockGive();
 }
 
-bool spoolSetConfig(JsonVariantConst in, String& error) {
-  lockTake();
-  bool ok = applyConfig(in, error);
+// Writes the current config to NVS (read back by spoolBegin)
+static bool saveConfig() {
   String saved;
-  if (ok) {
+  lockTake();
+  {
     JsonDocument doc;
     configToJson(doc.to<JsonObject>());
     serializeJson(doc, saved);
   }
   lockGive();
-  if (!ok) return false;
   Preferences prefs;
-  if (!prefs.begin("spool", false)) {
-    error = "could not open flash storage";
-    return false;
-  }
+  if (!prefs.begin("spool", false)) return false;
   prefs.putString("cfg", saved);
   prefs.end();
   Serial.println("[config] saved");
   return true;
+}
+
+bool spoolSetConfig(JsonVariantConst in, String& error) {
+  lockTake();
+  bool ok = applyConfig(in, error);
+  lockGive();
+  if (!ok) return false;
+  if (!saveConfig()) {
+    error = "could not open flash storage";
+    return false;
+  }
+  return true;
+}
+
+CalibUpdate spoolCalibrate(int cell, double mean, double stdDev) {
+  CalibUpdate u;
+  if (stdDev > CALIB_MAX_STD) {
+    u.result = "unstable";
+    return u;
+  }
+  // Filament tension lowers the reading while printing, so it isn't an at-rest level
+  if (timeValid() && spoolView(cell, time(nullptr)).consuming) {
+    u.result = "printing";
+    return u;
+  }
+  lockTake();
+  CellCfg& c = cfg[cell];
+  double dEmpty = c.hasEmpty ? fabs(mean - c.empty) : INFINITY;
+  double dFull = c.hasFull ? fabs(mean - c.full) : INFINITY;
+  long* target = nullptr;
+  if (dEmpty <= dFull && dEmpty <= CALIB_MATCH_TOLERANCE) {
+    target = &c.empty;
+    u.result = "empty";
+  } else if (dFull < dEmpty && dFull <= CALIB_MATCH_TOLERANCE) {
+    target = &c.full;
+    u.result = "full";
+  } else {
+    u.result = "no_match";
+  }
+  if (target) {
+    u.changed = true;
+    u.before = *target;
+    u.after = *target = lround(mean);
+  }
+  lockGive();
+  if (u.changed) u.saved = saveConfig();
+  return u;
 }

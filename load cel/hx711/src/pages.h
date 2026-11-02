@@ -310,17 +310,23 @@ th:first-child,td:first-child{text-align:left}
 <button id="start" onclick="post('start')">Start calibration</button>
 <button id="cancel" onclick="post('cancel')">Cancel</button>
 <p id="status">-</p>
-<table><tr><th>Cell</th><th>Mean</th><th>Std dev</th></tr>
-<tr><td>1</td><td id="m1">-</td><td id="s1">-</td></tr>
-<tr><td>2</td><td id="m2">-</td><td id="s2">-</td></tr></table>
+<table><tr><th>Cell</th><th>Mean</th><th>Std dev</th><th>Result</th></tr>
+<tr><td>1</td><td id="m1">-</td><td id="s1">-</td><td id="r1">-</td></tr>
+<tr><td>2</td><td id="m2">-</td><td id="s2">-</td><td id="r2">-</td></tr></table>
+<p style="color:#666">When it finishes, a mean close to the saved empty reel or full spool value
+(see <a href="/config">config</a>) replaces it. Calibrate with the spool at rest, not printing.</p>
 <script>
 const f=v=>Math.round(v).toLocaleString();
+const msg={no_match:'not near empty or full, not saved',unstable:'not stable (std dev too high), not saved',
+  printing:'printing, not saved'};
+const res=r=>!r.result?'-':r.changed?'saved as '+r.result+' (was '+f(r.before)+')'+(r.saved?'':' - flash error!'):msg[r.result];
 function show(c){
   document.getElementById('status').textContent=
     c.state+' - '+c.readings+'/'+c.window+' readings, '+c.elapsed_s+' s';
   const has=c.readings>0;
   m1.textContent=has?f(c.cell1.mean):'-'; s1.textContent=has?f(c.cell1.std_dev):'-';
   m2.textContent=has?f(c.cell2.mean):'-'; s2.textContent=has?f(c.cell2.std_dev):'-';
+  r1.textContent=res(c.cell1); r2.textContent=res(c.cell2);
   document.getElementById('cancel').disabled=c.state!='running';
 }
 function post(a){fetch('/calibration/'+a,{method:'POST'}).then(r=>r.json()).then(show);}
