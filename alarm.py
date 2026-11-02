@@ -197,6 +197,7 @@ def _default_prev() -> dict:
         "status": None,
         "layer": None,
         "job_log": None,  # active print log: path, file, start, pause_start, paused_total
+        "job_polled": False,  # True after the first get_job: no "Print Started" for a job already running at startup
     }
 
 prev_by_printer: dict[str, dict] = {}
@@ -220,7 +221,9 @@ def check_reply(printer_ip: str, ntfy: str) -> None:
     if seqs_reply is not None:
         if seqs_reply != prev["seqs_reply"] and prev["seqs_reply"] is not None:
             reply = get_reply(printer_ip)
-            if reply:
+            if reply and MESSAGE_START_PRINTING in reply:
+                save_last_reply(printer_ip, reply)  # "Print Started" is sent by check_job_log
+            elif reply:
                 notify_once(
                     printer_ip,
                     f"m118:{reply}",
@@ -387,7 +390,7 @@ def _job_log_end(log: dict, job: dict, now: datetime) -> None:
     )
 
 
-def check_job_log(printer_ip: str, status: str) -> None:
+def check_job_log(printer_ip: str, status: str, ntfy: str) -> None:
     # One log file per print: START, every PAUSE/RESUME, END
     if status is None:
         return
@@ -395,6 +398,8 @@ def check_job_log(printer_ip: str, status: str) -> None:
     if job is None:
         return
     prev = _prev(printer_ip)
+    first_poll = not prev["job_polled"]
+    prev["job_polled"] = True
     log = prev["job_log"]
     now = datetime.now()
     file_name = (job.get("file") or {}).get("fileName")
@@ -408,6 +413,17 @@ def check_job_log(printer_ip: str, status: str) -> None:
 
     if log is None:
         log = prev["job_log"] = _job_log_start(printer_ip, file_name, job.get("duration"))
+        # New print: re-arm M118 alerts so repeated messages notify once per print
+        notified = _notified_problems(printer_ip)
+        notified -= {k for k in notified if k.startswith("m118:")}
+        if not first_poll:
+            notify(
+                "Print Started",
+                f"{_printer_label(printer_ip)} ({_printer_slug(printer_ip)})\n"
+                f"Job: {Path(file_name.replace(chr(92), '/')).name}",
+                tags="printer",
+                ntfy=ntfy,
+            )
 
     if status in PAUSED_STATES and log["pause_start"] is None:
         log["pause_start"] = now
@@ -477,12 +493,12 @@ def main() -> None:
 
             check_layer(PRINTER1_IP)
             status1 = check_state_status(PRINTER1_IP, NTFY1)
-            check_job_log(PRINTER1_IP, status1)
+            check_job_log(PRINTER1_IP, status1, NTFY1)
             check_filament_time(PRINTER1_IP, spools, NTFY1)
 
             check_layer(PRINTER2_IP)
             status2 = check_state_status(PRINTER2_IP, NTFY2)
-            check_job_log(PRINTER2_IP, status2)
+            check_job_log(PRINTER2_IP, status2, NTFY2)
             check_filament_time(PRINTER2_IP, spools, NTFY2)
 
             time.sleep(REQUEST_TEN_SECONDS)
