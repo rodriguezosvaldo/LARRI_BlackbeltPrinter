@@ -5,7 +5,8 @@ file has no ;TYPE: comments), as polylines in raw G-code coordinates (X, Y = alo
 Z = belt). Points closer than MIN_STEP_MM to the previous one are dropped; if the result is
 still bigger than MAX_POINTS, only every n-th layer is kept.
 
-Also returns the Z range of the extrusion (belt travel = length of the part on the belt), the
+Also returns the Z range of the extrusion (belt travel; longer than the piece when its end is
+not slanted like the layers, so the viewer measures the piece from its geometry instead), the
 total extruded length (sum of positive E deltas, G92 aware) and header info (gantry angle,
 layer count, filament used).
 """

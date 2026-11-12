@@ -3,7 +3,7 @@
     python twin/twin_server.py     -> http://localhost:5053 (TWIN_PORT to change it)
 
 Polls each Duet (rr_model) and each ESP32 (/api/spools) and serves twin/web/:
-    GET /api/state           both printers: job, % done, Z, temperatures, DHT, spools, piece status
+    GET /api/state           both printers: job, % done, Z, spools, piece status
     GET /api/piece/<p1|p2>   the current job's piece (outer-wall toolpath from the G-code, see gcode.py)
     GET /models/<file>       STL files from twin/models/ (shown instead of the toolpath when one matches)
 
@@ -42,16 +42,15 @@ PRINTERS = {
 DUET_POLL_S = 2  # the ESP32 also polls the Duet: don't go much lower
 ESP_POLL_S = 5
 PIECE_RETRY_S = 60
-FILAMENT_DIAMETER_MM = 1.75
-FILAMENT_DENSITY = 1.24  # g/cm3 (PLA ~1.24, PETG ~1.27, ABS ~1.04): only for the kg estimate
-# Duet sensors (M308): E0 / Bed0 / Bed1 thermistors, S5 = DHT22 temperature, S6 = DHT humidity
-DHT_TEMP_SENSOR = 5
-DHT_HUMID_SENSOR = 6
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
 MODEL_DIR = ROOT / "models"
 CACHE_DIR = ROOT / "cache"  # gitignored
+# When each cell's empty/full/ref_rate last changed (calibration or /config), as seen by this
+# server: the ESP32s don't keep a date. gitignored.
+CELL_LOG = ROOT / "cell_updates.json"
+CELL_FIELDS = ("empty", "full", "ref_rate")
 SAFE_NAME = re.compile(r"^[\w .()+-]+\.(stl|json)$", re.IGNORECASE)
 STATIC_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
 
@@ -59,6 +58,42 @@ lock = threading.Lock()
 download_lock = threading.Lock()  # one G-code download at a time (two at once got reset by a Duet)
 state: dict = {}  # printer key -> state dict for /api/state
 pieces: dict = {}  # printer key -> gzipped JSON of the current piece
+cell_log: dict = {}  # "p1/cell1" -> {"values": {...}, "updated": unix | None, "since": unix}
+cell_log_lock = threading.Lock()
+
+
+def load_cell_log() -> None:
+    global cell_log
+    try:
+        cell_log = json.loads(CELL_LOG.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        cell_log = {}
+    except (OSError, ValueError) as e:
+        print(f"[cells] can't read {CELL_LOG.name}: {e}")
+        cell_log = {}
+
+
+def track_cell(key: str, name: str, cell: dict) -> dict:
+    """Records when the cell's calibration values change; returns {updated, since}."""
+    values = {k: cell.get(k) for k in CELL_FIELDS}
+    now = time.time()
+    with cell_log_lock:
+        entry = cell_log.get(f"{key}/{name}")
+        if entry is None:  # first time seen: the last change happened before now, date unknown
+            entry = {"values": values, "updated": None, "since": now}
+        elif all(entry["values"].get(k) == values[k] for k in CELL_FIELDS):
+            return {"updated": entry["updated"], "since": entry["since"]}
+        else:
+            changed = [k for k in CELL_FIELDS if entry["values"].get(k) != values[k]]
+            print(f"[{key}] {name} updated: " +
+                  ", ".join(f"{k} {entry['values'].get(k)} -> {values[k]}" for k in changed))
+            entry = {"values": values, "updated": now, "since": entry["since"]}
+        cell_log[f"{key}/{name}"] = entry
+        try:
+            CELL_LOG.write_text(json.dumps(cell_log, indent=1), encoding="utf-8")
+        except OSError as e:
+            print(f"[cells] can't write {CELL_LOG.name}: {e}")
+        return {"updated": entry["updated"], "since": entry["since"]}
 
 
 def get_json(url: str, timeout: float = 4) -> dict:
@@ -70,38 +105,7 @@ def duet_model(base: str, key: str):
     return get_json(f"{base}/rr_model?key={key}&flags=d99vno")["result"]
 
 
-def mm_to_kg(mm):
-    if mm is None:
-        return None
-    area = 3.141592653589793 * (FILAMENT_DIAMETER_MM / 2) ** 2  # mm2
-    return mm * area / 1000 * FILAMENT_DENSITY / 1000  # mm3 -> cm3 -> g -> kg
-
-
 # ============================ Duet polling ============================
-def sensor_by(sensors: list, index: int, types: tuple, name_has: str):
-    """Sensor at `index` if it looks right, else the first one matching type or name."""
-    if index < len(sensors) and sensors[index] and sensors[index].get("type", "").lower() in types:
-        return sensors[index]
-    for s in sensors:
-        if s and (s.get("type", "").lower() in types or name_has in s.get("name", "").lower()):
-            return s
-    return None
-
-
-def read_temps(sensors: list, heaters: list) -> dict:
-    """{name: {current, target}} for every heater (named after its sensor: E0, Bed0, Bed1)."""
-    out = {}
-    for h in heaters:
-        if not h:
-            continue
-        i = h.get("sensor", -1)
-        s = sensors[i] if 0 <= i < len(sensors) and sensors[i] else {}
-        st = h.get("state")
-        target = h.get("active") if st == "active" else h.get("standby") if st == "standby" else 0
-        out[s.get("name") or f"H{i}"] = {"current": h.get("current"), "target": target, "state": st}
-    return out
-
-
 def job_view(job: dict) -> dict | None:
     f = job.get("file") or {}
     path = f.get("fileName")
@@ -111,19 +115,24 @@ def job_view(job: dict) -> dict | None:
     pos = job.get("filePosition") or 0
     total_mm = sum(x for x in (f.get("filament") or []) if x) or None
     used_mm = job.get("rawExtrusion")
+    file_pct = round(pos / size * 100, 2) if size else None
+    # Same as DWC: progress by filament used when the slicer gave the total, else by file position
+    if total_mm and used_mm is not None:
+        percent, source = round(min(used_mm / total_mm, 1) * 100, 2), "filament"
+    else:
+        percent, source = file_pct, "file"
     return {
         "path": path,
         "file": path.rsplit("/", 1)[-1],
         "size": size,
         "last_modified": f.get("lastModified"),
-        "percent": round(pos / size * 100, 2) if size else None,
+        "percent": percent,
+        "percent_source": source,
         "layer": job.get("layer"),
         "duration": job.get("duration"),
-        "time_left": (job.get("timesLeft") or {}).get("file"),
+        "time_left": (job.get("timesLeft") or {}).get("filament"),  # same basis as percent
         "filament_total_mm": total_mm,
         "filament_used_mm": used_mm,
-        "filament_total_kg": mm_to_kg(total_mm),
-        "filament_used_kg": mm_to_kg(used_mm),
         "objects": [o.get("name") for o in ((job.get("build") or {}).get("objects") or []) if o],
     }
 
@@ -137,11 +146,6 @@ def poll_duet(key: str) -> None:
             upd["job"] = job_view(duet_model(base, "job"))
             axes = duet_model(base, "move.axes")
             upd["z"] = next((a.get("machinePosition") for a in axes if a.get("letter") == "Z"), None)
-            sensors = duet_model(base, "sensors.analog")
-            upd["temps"] = read_temps(sensors, duet_model(base, "heat.heaters"))
-            t = sensor_by(sensors, DHT_TEMP_SENSOR, ("dht22", "dht21", "dht11"), "dht temp")
-            h = sensor_by(sensors, DHT_HUMID_SENSOR, ("dhthumidity",), "humid")
-            upd["dht"] = {"temp": t and t.get("lastReading"), "humidity": h and h.get("lastReading")}
             upd["online"], upd["error"] = True, None
             upd["last_seen"] = time.time()
         except (OSError, ValueError, KeyError, TypeError) as e:
@@ -161,9 +165,12 @@ def poll_esp(key: str) -> None:
             p = get_json(f"{base}/api/spools")["printers"][key]
             cells = {
                 name: {k: c.get(k) for k in ("percent", "hours_left_live", "hours_left_ref",
-                                             "consuming", "note", "current", "full", "empty")}
+                                             "consuming", "note", "current", "full", "empty",
+                                             "live_rate", "live_span", "ref_rate")}
                 for name, c in (p.get("cells") or {}).items()
             }
+            for name, c in cells.items():
+                c["config_updated"] = track_cell(key, name, c)
             upd = {"spools": cells, "spools_online": bool(p.get("online")),
                    "spools_error": p.get("error")}
         except (OSError, ValueError, KeyError, TypeError) as e:
@@ -320,8 +327,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    load_cell_log()
     for key, cfg in PRINTERS.items():
-        state[key] = {"key": key, "label": cfg["label"], "online": False, "error": "not polled yet",
+        state[key] = {"key": key, "label": cfg["label"], "esp": cfg["esp"],
+                      "online": False, "error": "not polled yet",
                       "spools_online": False, "piece": {"status": "none"}}
         threading.Thread(target=poll_duet, args=(key,), daemon=True).start()
         threading.Thread(target=poll_esp, args=(key,), daemon=True).start()

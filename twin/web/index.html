@@ -38,16 +38,22 @@
   .vtools button:hover { color: var(--text); }
   .vtools button[hidden] { display: none; }
   .vlabel { position: absolute; left: 10px; bottom: 8px; font-size: .75rem; color: var(--muted); }
+  .lbl { font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+  .lbl.pct { font-size: 1.2rem; font-weight: 800; color: #fff;
+             text-shadow: 0 1px 3px #000, 0 0 12px rgba(0,0,0,.8); }
+  .lbl.dim { font-size: .8rem; font-weight: 600; color: #9aa4ae; background: rgba(10,12,15,.75);
+             padding: 1px 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, #6b7785 60%, transparent); }
+  .lbl.dim.done { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
   .body { padding: 12px 16px 16px; display: grid; gap: 14px; }
   .file { font-weight: 600; word-break: break-word; }
   .muted { color: var(--muted); font-size: .85rem; }
+  .end { color: var(--ok); font-weight: 700; }
   .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
   .big { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .num { font-variant-numeric: tabular-nums; }
   .bar { height: 10px; background: #232a32; border-radius: 99px; overflow: hidden; margin-top: 6px; }
   .bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px;
              transition: width .6s; }
-  .bar.z > i { background: var(--info); }
   h3 { margin: 0 0 6px; font-size: .78rem; color: var(--muted); font-weight: 600;
        text-transform: uppercase; letter-spacing: .06em; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
@@ -55,10 +61,28 @@
   .tile .k { font-size: .75rem; color: var(--muted); }
   .tile .v { font-size: 1.15rem; font-weight: 650; font-variant-numeric: tabular-nums; }
   .tile .t { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .tile.hot .v { color: var(--accent); }
-  .spool { display: grid; gap: 2px; }
+  .spool { display: grid; gap: 10px; padding: 12px; }
+  .spool { transition: border-color .4s, box-shadow .4s; }
+  .spool.feeding { border-color: color-mix(in srgb, var(--info) 55%, transparent);
+                   box-shadow: 0 0 10px color-mix(in srgb, var(--info) 22%, transparent); }
+  .spool .bar { margin-top: 0; }
   .spool .bar > i { background: var(--ok); }
-  .spool.low .bar > i { background: var(--bad); }
+  .s-title { font-weight: 650; }
+  .s-btns { display: flex; gap: 6px; }
+  .btn { flex: 1; text-align: center; font-size: .78rem; padding: 4px 8px; border-radius: 6px;
+         background: #1f252c; color: var(--muted); border: 1px solid var(--line); text-decoration: none; }
+  .btn:hover { color: var(--text); border-color: var(--muted); }
+  .s-left { text-align: center; padding: 8px 6px; border-radius: 8px; background: #12161a; }
+  .s-left .big { font-size: 1.35rem; color: var(--ok); line-height: 1.2; }
+  .s-left .big.warn { color: var(--warn); }
+  .s-left .big.bad { color: var(--bad); }
+  .s-left .big.muted { color: var(--muted); }
+  .s-sub { color: var(--muted); font-size: .8rem; margin-top: 2px; }
+  .spool dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: .82rem; }
+  .spool dt { color: var(--muted); }
+  .spool dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .spool dd.muted { color: var(--muted); font-weight: 400; }
+  [hidden] { display: none !important; }
   .tag { font-size: .7rem; padding: 1px 7px; border-radius: 99px; background: #23303a; color: var(--info); }
   .err { color: var(--bad); font-size: .85rem; }
 </style>
@@ -94,34 +118,6 @@
         <div class="muted" data-f="jobinfo"></div>
       </div>
       <div>
-        <div class="row"><h3>Job progress</h3><span class="big" data-f="percent">—</span></div>
-        <div class="bar"><i data-f="percentbar"></i></div>
-      </div>
-      <div>
-        <div class="row"><h3>Belt (Z) — horizontal length printed</h3>
-          <span class="num" data-f="zpct"></span></div>
-        <div class="row"><span class="big" data-f="z">—</span><span class="muted num" data-f="ztotal"></span></div>
-        <div class="bar z"><i data-f="zbar"></i></div>
-      </div>
-      <div>
-        <h3>Filament</h3>
-        <div class="grid">
-          <div class="tile"><div class="k">Job total</div><div class="v" data-f="filtotal">—</div><div class="t" data-f="filtotalkg"></div></div>
-          <div class="tile"><div class="k">Used</div><div class="v" data-f="filused">—</div><div class="t" data-f="filusedkg"></div></div>
-          <div class="tile"><div class="k">Remaining</div><div class="v" data-f="filleft">—</div><div class="t" data-f="filleftkg"></div></div>
-        </div>
-      </div>
-      <div>
-        <h3>Temperatures</h3>
-        <div class="grid">
-          <div class="tile" data-tile="E0"><div class="k">E0</div><div class="v">—</div><div class="t"></div></div>
-          <div class="tile" data-tile="Bed0"><div class="k">Bed 0</div><div class="v">—</div><div class="t"></div></div>
-          <div class="tile" data-tile="Bed1"><div class="k">Bed 1</div><div class="v">—</div><div class="t"></div></div>
-          <div class="tile"><div class="k">DHT temp</div><div class="v" data-f="dhtt">—</div><div class="t">enclosure</div></div>
-          <div class="tile"><div class="k">DHT humidity</div><div class="v" data-f="dhth">—</div><div class="t">enclosure</div></div>
-        </div>
-      </div>
-      <div>
         <h3>Spools (load cells)</h3>
         <div class="grid" data-f="spools" style="grid-template-columns: 1fr 1fr"></div>
         <div class="err" data-f="spoolerr"></div>
@@ -129,6 +125,28 @@
       <div class="err" data-f="error"></div>
     </div>
   </section>
+</template>
+
+<template id="spool-tpl">
+  <div class="tile spool">
+    <div class="row"><span class="s-title"><span class="s-name"></span> <span class="tag s-feed" hidden>feeding</span></span>
+      <span class="muted num s-pct"></span></div>
+    <div class="bar"><i></i></div>
+    <div class="s-btns">
+      <a class="btn s-calib" target="_blank" rel="noopener">Calibration</a>
+      <a class="btn s-config" target="_blank" rel="noopener">Config</a>
+    </div>
+    <div class="s-left">
+      <div class="big s-eta">—</div>
+      <div class="s-sub">—</div>
+    </div>
+    <dl>
+      <dt>Current reading</dt><dd class="s-current">—</dd>
+      <dt>Empty reel</dt><dd class="s-empty">—</dd>
+      <dt>Live rate</dt><dd class="s-live">—</dd>
+      <dt>Reference rate</dt><dd class="s-ref">—</dd>
+    </dl>
+  </div>
 </template>
 
 <script type="module" src="app.js"></script>

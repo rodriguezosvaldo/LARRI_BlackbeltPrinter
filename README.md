@@ -17,7 +17,7 @@ is still in the repo for reference but is not run.
 |------|--------------|---------|
 | [`load cel/hx711/`](load%20cel/hx711/) | Printer monitor + ntfy alerts + job logs, load cells, time left per spool, web dashboard | One ESP32 per printer |
 | [`log_server.py`](log_server.py) | Receives the ESP32s' job logs, replies and load-cell CSVs into `logs/` | PC (optional) |
-| [`twin/`](twin/) | Digital twin (read only): 3D view of the piece being printed, belt (Z) progress, filament, temperatures, spools of both printers | PC (optional) |
+| [`twin/`](twin/) | Digital twin (read only): 3D view of the piece being printed, printed length, job %, time left and spools of both printers | PC (optional) |
 | [`dht22.cpp`](dht22.cpp) | Temperature/humidity monitoring and heater control for the print enclosure, with its own web UI | ESP32 |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
 
@@ -122,12 +122,15 @@ One page with both printers, read only (it never sends commands):
   and its outer walls are drawn in 3D, cut by the gantry plane at the current belt position
   (orange = printed, grey = still to print). Cached in `twin/cache/`. To show the real model
   instead, put its STL in [`twin/models/`](twin/models/README.md) (named like the Cura mesh).
-- **Belt (Z):** distance the belt has moved since the first layer = horizontal length of the
-  piece printed so far, out of the total from the G-code.
-- **Job:** % done (file position, like DWC), layer, time left; filament needed for the job,
-  used and remaining (m and ≈ kg, density in `twin_server.py`).
-- **Temperatures:** E0, Bed0, Bed1, and the DHT22 on each Duet (sensors 5 and 6).
-- **Spools:** % and hours left per load cell, from each ESP32's `/api/spools`.
+- **In the 3D view:** the job % (filament used / job total, like DWC) on the printed part, and
+  two dimension lines on the belt: the piece's total length and the length printed so far
+  (everything up to the current belt Z).
+- **Job:** elapsed, time left and estimated end (Duet's filament-based estimate).
+- **Spools:** the ESP32 spool monitor for both cells (from each ESP32's `/api/spools`): %, when
+  the spool runs out and time left (live or reference rate), current reading, empty reel, live
+  and reference rate, and Calibration / Config buttons that open that ESP32's pages. Hovering
+  them shows when the cell's empty / full / reference rate last changed; the ESP32s don't keep
+  that date, so the twin records it (`twin/cell_updates.json`) while it is running.
 
 Printer and ESP32 addresses are at the top of `twin/twin_server.py` (or `TWIN_P1_DUET`,
 `TWIN_P1_ESP`, ... environment variables).

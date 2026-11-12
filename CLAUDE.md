@@ -114,7 +114,7 @@ validated with `SAFE_NAME`. `logs/` is gitignored.
 ## `twin/` (digital twin)
 
 `twin_server.py` (`ThreadingHTTPServer`, `TWIN_PORT` 5053): one thread per Duet polls
-`rr_model` (`state.status`, `job`, `move.axes`, `sensors.analog`, `heat.heaters`) every 2 s, one per
+`rr_model` (`state.status`, `job`, `move.axes`) every 2 s, one per
 ESP32 polls `/api/spools` every 5 s; `GET /api/state` returns both. When `job.file.fileName`
 changes, the G-code is streamed from `rr_download` through `gcode.Parser` (outer walls only,
 points < 1.5 mm apart dropped) and cached gzipped in `twin/cache/<hash>.json.gz`
@@ -122,9 +122,8 @@ points < 1.5 mm apart dropped) and cached gzipped in `twin/cache/<hash>.json.gz`
 name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part frame:
 h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
 printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
-`machinePosition`; `G92 Z0` at the start makes it match the G-code). Temps come from
-`sensors.analog` by name (E0, Bed0, Bed1) and DHT sensors 5/6. The repo's `config.g/` files are
-out of date (no DHT `M308`), don't rely on them for sensor numbers.
+`machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
+`timesLeft.filament`), like DWC.
 
 ## `load cel/calibration.py`
 

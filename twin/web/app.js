@@ -9,25 +9,34 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 
 const POLL_MS = 2000;
 const DEFAULT_GANTRY_ANGLE = 35;
-const COLORS = { printed: 0xff8a3d, ghost: 0x6b7785, belt: 0x20262d, plane: 0x4ea8f2 };
+const COLORS = { printed: 0xff8a3d, ghost: 0x6b7785, belt: 0x20262d, plane: 0x4ea8f2,
+                 dimTotal: 0x6b7785, dimDone: 0xff8a3d }; // same as ghost / printed piece
 const AXES = { x: 0, y: 1, z: 2 };
 
 // ============================ formatting ============================
 const num = (v, d = 1) => (v == null || isNaN(v) ? "—" : Number(v).toFixed(d));
-function fmtLen(mm) {
-  if (mm == null) return "—";
-  const m = mm / 1000;
-  return m >= 100 ? `${Math.round(m).toLocaleString()} m` : `${m.toFixed(1)} m`;
-}
-const fmtKg = (kg) => (kg == null ? "" : kg >= 1 ? `≈ ${kg.toFixed(2)} kg` : `≈ ${Math.round(kg * 1000)} g`);
+// Durations: "2d 13h 09min", "13h 09min" or "9min"
 function fmtDur(s) {
   if (s == null) return "—";
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return h ? `${h} h ${String(m).padStart(2, "0")} min` : `${m} min`;
+  const t = Math.round(s / 60), d = Math.floor(t / 1440), h = Math.floor((t % 1440) / 60), m = t % 60;
+  const mm = `${String(m).padStart(2, "0")}min`;
+  return d ? `${d}d ${h}h ${mm}` : h ? `${h}h ${mm}` : `${m}min`;
 }
+const cnt = (v) => (v == null ? "—" : Math.round(v).toLocaleString("en-US"));
+// When the spool runs out, e.g. "Today 18:40" or "Wed, Nov 19 22:25"
+function fmtEta(h) {
+  if (h == null) return "—";
+  const t = new Date(Date.now() + h * 3600e3);
+  const time = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (t.toDateString() === new Date().toDateString()) return `Today ${time}`;
+  return `${t.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ${time}`;
+}
+const fmtDate = (unix) => new Date(unix * 1000).toLocaleString(undefined, {
+  month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const prefs = {
   get(k) { try { return JSON.parse(localStorage.getItem("twin:" + k)); } catch { return null; } },
   set(k, v) { try { localStorage.setItem("twin:" + k, JSON.stringify(v)); } catch {} },
@@ -41,6 +50,9 @@ class Viewer {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.localClippingEnabled = true;
     el.prepend(this.renderer.domElement);
+    this.labels = new CSS2DRenderer();
+    Object.assign(this.labels.domElement.style, { position: "absolute", inset: "0", pointerEvents: "none" });
+    this.renderer.domElement.after(this.labels.domElement);
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0c0f);
     this.camera = new THREE.PerspectiveCamera(40, 1, 1, 50000);
@@ -66,6 +78,7 @@ class Viewer {
     const loop = () => {
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
+      this.labels.render(this.scene, this.camera);
       requestAnimationFrame(loop);
     };
     loop();
@@ -74,6 +87,7 @@ class Viewer {
   resize() {
     const w = this.el.clientWidth, h = this.el.clientHeight;
     this.renderer.setSize(w, h, false);
+    this.labels.setSize(w, h);
     this.camera.aspect = w / Math.max(h, 1);
     this.camera.updateProjectionMatrix();
   }
@@ -85,7 +99,7 @@ class Viewer {
     }
     this.toolpath = null;
     this.stl = null;
-    this.belt = this.plane = null;
+    this.belt = this.plane = this.stage = null;
   }
 
   // piece = /api/piece JSON: runs [[z, [x0, y0, x1, y1, ...]], ...] in G-code coordinates
@@ -203,6 +217,16 @@ class Viewer {
     this.planeH = hMax;
     this.planeX = (box.min.x + box.max.x) / 2;
     this.world.add(this.plane);
+
+    // on the belt, beside the piece (camera side): total length and length printed so far
+    const x = box.min.x;
+    this.stage = {
+      box: box.clone(),
+      total: dimension(x - 170, COLORS.dimTotal, "dim"),
+      done: dimension(x - 90, COLORS.dimDone, "dim done"),
+      pct: label("pct"),
+    };
+    for (const k of ["total", "done", "pct"]) this.world.add(this.stage[k].obj ?? this.stage[k]);
   }
 
   showSource() {
@@ -212,8 +236,9 @@ class Viewer {
   }
 
   // z = current belt position in G-code coordinates (Duet machinePosition)
-  update(z) {
+  update(z, percent = this.percent) {
     this.z = z;
+    this.percent = percent;
     const zz = z ?? -1e9;
     const tp = this.toolpath;
     if (tp) {
@@ -234,6 +259,21 @@ class Viewer {
       this.plane.position.set(this.planeX, h, zz - h * cot);
       this.plane.rotation.set(-(Math.PI / 2 - a), 0, 0);
     }
+    const st = this.stage;
+    if (st) {
+      const d0 = st.box.min.z, d1 = st.box.max.z;
+      // at belt level (h = 0) everything up to d = Z is printed
+      const dz = z == null ? d0 : Math.min(Math.max(zz, d0), d1);
+      st.total.set(d0, d1, `${Math.round(d1 - d0)} mm`);
+      st.done.set(d0, dz, `${Math.round(dz - d0)} mm`);
+      st.done.obj.visible = z != null && dz > d0;
+      // % in the middle of the printed part (half height, behind the gantry plane)
+      const h = st.box.max.y / 2;
+      const dm = Math.min(Math.max(zz - h * cot, d0), d1);
+      st.pct.position.set((st.box.min.x + st.box.max.x) / 2, h, (d0 + dm) / 2);
+      st.pct.visible = z != null && percent != null && dm > d0;
+      st.pct.element.textContent = percent != null ? `${percent.toFixed(1)}%` : "";
+    }
   }
 
   fit() {
@@ -248,6 +288,33 @@ class Viewer {
     this.camera.far = r * 20;
     this.camera.updateProjectionMatrix();
   }
+}
+
+function label(cls) {
+  const div = document.createElement("div");
+  div.className = `lbl ${cls}`;
+  return new CSS2DObject(div);
+}
+
+// Dimension line along the belt at a fixed x, lying on the belt: main line + end ticks + label
+function dimension(x, color, cls) {
+  const pos = new Float32Array(18);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const obj = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color }));
+  const text = label(cls);
+  obj.add(text);
+  const y = 1, tick = 14;
+  return {
+    obj,
+    set(d0, d1, txt) {
+      pos.set([x, y, d0, x, y, d1, x - tick, y, d0, x + tick, y, d0, x - tick, y, d1, x + tick, y, d1]);
+      g.attributes.position.needsUpdate = true;
+      g.computeBoundingSphere();
+      text.position.set(x - 2 * tick, y, (d0 + d1) / 2);
+      text.element.textContent = txt;
+    },
+  };
 }
 
 // Non-indexed triangles: mirroring one axis inverts the winding, swap 2 vertices per triangle
@@ -335,6 +402,56 @@ class Card {
     this.syncButtons();
   }
 
+  spoolEl(name) {
+    this.spoolEls ||= {};
+    if (!this.spoolEls[name]) {
+      const el = document.getElementById("spool-tpl").content.firstElementChild.cloneNode(true);
+      el.querySelector(".s-name").textContent = `${this.key}_${name}`;
+      this.f.spools.append(el);
+      this.spoolEls[name] = el;
+    }
+    return this.spoolEls[name];
+  }
+
+  renderSpool(name, c, esp) {
+    const el = this.spoolEl(name), q = (sel) => el.querySelector(sel);
+    const val = (sel, text, muted) => { q(sel).textContent = text; q(sel).classList.toggle("muted", !!muted); };
+    q(".s-calib").href = `${esp}/calib`;
+    q(".s-config").href = `${esp}/config`;
+    const u = c.config_updated || {};
+    const tip = u.updated ? `last update: ${fmtDate(u.updated)}`
+      : u.since ? `last update: before ${fmtDate(u.since)}` : "last update: unknown";
+    q(".s-calib").title = q(".s-config").title = tip;
+    el.title = c.note || "";
+    q(".s-feed").hidden = !c.consuming;
+    el.classList.toggle("feeding", !!c.consuming);
+    q(".s-pct").textContent = c.percent != null ? `${num(c.percent, 1)} %` : "";
+
+    val(".s-current", cnt(c.current), c.current == null);
+    val(".s-empty", cnt(c.empty), c.empty == null);
+    val(".s-ref", c.ref_rate ? `${cnt(c.ref_rate)} /h` : "—", !c.ref_rate);
+    val(".s-live", c.live_rate == null
+      ? `collecting (${Math.round((c.live_span || 0) / 60)} min)`
+      : `${cnt(c.live_rate)} /h` + (c.consuming ? "" : " (idle)"), !c.consuming);
+
+    // Headline: when the spool runs out (live estimate when feeding, reference while collecting)
+    const idle = c.live_rate != null && !c.consuming;
+    const h = idle ? null : c.consuming ? c.hours_left_live : c.hours_left_ref;
+    const big = q(".s-eta");
+    big.textContent = idle ? "not feeding" : fmtEta(h);
+    big.className = "big s-eta " + (h == null ? "muted" : h < 1 ? "bad" : h < 2 ? "warn" : "");
+    let sub;
+    if (idle) sub = "idle";
+    else if (c.empty == null) sub = "empty reel not calibrated";
+    else if (c.current == null) sub = "no reading";
+    else if (h == null) sub = "no rate yet";
+    else sub = `${fmtDur(h * 3600)} left · ${c.consuming ? "at live rate" : "at reference rate (collecting live data)"}`;
+    q(".s-sub").textContent = sub;
+    const bar = q(".bar > i");
+    bar.style.width = `${Math.max(0, Math.min(100, c.percent ?? 0))}%`;
+    bar.style.background = h != null && h < 1 ? "var(--bad)" : h != null && h < 2 ? "var(--warn)" : "var(--ok)";
+  }
+
   render(p) {
     this.set("label", p.label);
     const job = p.job;
@@ -366,64 +483,21 @@ class Card {
     else if (piece.status === "error" && !this.viewer.stl) overlay = `Could not read the G-code (${piece.error}), retrying in a minute…`;
     this.f.overlay.textContent = overlay;
     this.f.overlay.style.display = overlay ? "" : "none";
-    this.viewer.update(job ? p.z : null);
+    this.viewer.update(job ? p.z : null, job?.percent ?? null);
     this.syncButtons();
 
     // job
     this.set("file", job ? job.file.replace(/\.gcode$/i, "") : "—");
-    const layers = piece.layer_count;
-    this.set("jobinfo", job
-      ? [job.objects?.length ? `Model: ${job.objects.join(", ")}` : null,
-         `Layer ${job.layer ?? "—"}${layers ? " / " + layers : ""}`,
-         `elapsed ${fmtDur(job.duration)}`, `left ≈ ${fmtDur(job.time_left)}`].filter(Boolean).join(" · ")
-      : "");
-    this.set("percent", job?.percent != null ? `${num(job.percent, 1)}%` : "—");
-    this.f.percentbar.style.width = `${job?.percent ?? 0}%`;
+    const end = job?.time_left != null ? new Date(Date.now() + job.time_left * 1000) : null;
+    const endTxt = end ? end.toLocaleString(undefined, {
+      weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
+    this.f.jobinfo.innerHTML = job
+      ? `elapsed ${fmtDur(job.duration)} · left ≈ ${fmtDur(job.time_left)}` +
+        (endTxt ? ` · <b class="end">end ≈ ${endTxt}</b>` : "")
+      : "";
 
-    // belt Z
-    const z0 = piece.z_min, z1 = piece.z_max;
-    const done = job && p.z != null ? (z0 != null ? Math.max(0, p.z - z0) : p.z) : null;
-    const total = z0 != null && z1 != null ? z1 - z0 : null;
-    this.set("z", done != null ? `${num(done, 1)} mm` : "—");
-    this.set("ztotal", total != null ? `of ${num(total, 0)} mm · belt Z ${num(p.z, 1)}` : p.z != null ? `belt Z ${num(p.z, 1)}` : "");
-    const zpct = done != null && total ? Math.min(100, (done / total) * 100) : null;
-    this.set("zpct", zpct != null ? `${num(zpct, 1)}%` : "");
-    this.f.zbar.style.width = `${zpct ?? 0}%`;
-
-    // filament
-    const tot = job?.filament_total_mm ?? piece.extruded_mm, used = job?.filament_used_mm;
-    const left = tot != null && used != null ? Math.max(0, tot - used) : null;
-    const kg = (mm) => (mm == null || !tot || job?.filament_total_kg == null ? null : (job.filament_total_kg * mm) / tot);
-    this.set("filtotal", fmtLen(tot)); this.set("filtotalkg", fmtKg(kg(tot)));
-    this.set("filused", fmtLen(used)); this.set("filusedkg", fmtKg(kg(used)));
-    this.set("filleft", fmtLen(left)); this.set("filleftkg", fmtKg(kg(left)));
-
-    // temperatures
-    for (const name of ["E0", "Bed0", "Bed1"]) {
-      const tile = this.el.querySelector(`[data-tile="${name}"]`), t = p.temps?.[name];
-      tile.querySelector(".v").textContent = t ? `${num(t.current)}°C` : "—";
-      tile.querySelector(".t").textContent = t ? (t.target ? `→ ${num(t.target, 0)}°C` : t.state || "off") : "";
-      tile.classList.toggle("hot", !!t && t.current > 50);
-    }
-    this.set("dhtt", p.dht?.temp != null ? `${num(p.dht.temp)}°C` : "—");
-    this.set("dhth", p.dht?.humidity != null ? `${num(p.dht.humidity)}%` : "—");
-
-    // spools
-    const cells = p.spools || {};
-    this.f.spools.innerHTML = "";
-    for (const [name, c] of Object.entries(cells)) {
-      const pct = c.percent;
-      const div = document.createElement("div");
-      div.className = "tile spool" + (pct != null && pct < 10 ? " low" : "");
-      const hours = c.hours_left_live ?? null;
-      div.innerHTML = `<div class="row"><span class="k">${name.replace("cell", "Cell ")}</span>
-          ${c.consuming ? '<span class="tag">feeding</span>' : ""}</div>
-        <div class="v">${pct != null ? num(pct, 0) + "%" : "—"}</div>
-        <div class="bar"><i style="width:${Math.max(0, Math.min(100, pct ?? 0))}%"></i></div>
-        <div class="t">${hours != null ? `≈ ${num(hours, 1)} h left at current rate` : c.consuming ? "" : "not feeding"}</div>`;
-      if (c.note) div.title = c.note;
-      this.f.spools.append(div);
-    }
+    // spools (same logic as the ESP32 spool monitor, load cel/hx711/src/pages.h), always shown
+    for (const [name, c] of Object.entries(p.spools || {})) this.renderSpool(name, c, p.esp);
     this.set("spoolerr", p.spools_online ? "" : `Load cells: ${p.spools_error || "offline"}`);
   }
 }
