@@ -17,6 +17,7 @@ is still in the repo for reference but is not run.
 |------|--------------|---------|
 | [`load cel/hx711/`](load%20cel/hx711/) | Printer monitor + ntfy alerts + job logs, load cells, time left per spool, web dashboard | One ESP32 per printer |
 | [`log_server.py`](log_server.py) | Receives the ESP32s' job logs, replies and load-cell CSVs into `logs/` | PC (optional) |
+| [`twin/`](twin/) | Digital twin (read only): 3D view of the piece being printed, belt (Z) progress, filament, temperatures, spools of both printers | PC (optional) |
 | [`dht22.cpp`](dht22.cpp) | Temperature/humidity monitoring and heater control for the print enclosure, with its own web UI | ESP32 |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
 
@@ -24,6 +25,8 @@ is still in the repo for reference but is not run.
 BB_printer/
 ├── log_server.py            # PC log receiver for the ESP32s (stdlib only)
 ├── run_log_server.bat       # Windows launcher
+├── twin/                    # digital twin web app for both printers (stdlib only)
+├── run_twin.bat             # Windows launcher for the twin
 ├── alarm.py                 # previous PC printer monitor (reference, not run)
 ├── legacy_alarm.py          # older, larger version of alarm.py (reference only)
 ├── dht22.cpp                # ESP32 enclosure temperature/humidity + heater controller
@@ -106,6 +109,28 @@ If the PC is off, alerts and the dashboard keep working; the ESP32 keeps the log
 sends them later (load-cell rows: up to 2 h on P1, 1 h on P2). At boot the ESP32 reloads the
 last 2 h of readings from the PC so the live rate isn't lost. Give the PC a fixed IP (DHCP
 reservation) and allow Python through the Windows firewall on private networks.
+
+### Digital twin on the PC (`twin/`)
+
+```bash
+python twin/twin_server.py   # or run_twin.bat; http://localhost:5053, standard library only
+```
+
+One page with both printers, read only (it never sends commands):
+
+- **Piece:** when a job starts, the G-code is downloaded once from the Duet (~2 min for 30 MB)
+  and its outer walls are drawn in 3D, cut by the gantry plane at the current belt position
+  (orange = printed, grey = still to print). Cached in `twin/cache/`. To show the real model
+  instead, put its STL in [`twin/models/`](twin/models/README.md) (named like the Cura mesh).
+- **Belt (Z):** distance the belt has moved since the first layer = horizontal length of the
+  piece printed so far, out of the total from the G-code.
+- **Job:** % done (file position, like DWC), layer, time left; filament needed for the job,
+  used and remaining (m and ≈ kg, density in `twin_server.py`).
+- **Temperatures:** E0, Bed0, Bed1, and the DHT22 on each Duet (sensors 5 and 6).
+- **Spools:** % and hours left per load cell, from each ESP32's `/api/spools`.
+
+Printer and ESP32 addresses are at the top of `twin/twin_server.py` (or `TWIN_P1_DUET`,
+`TWIN_P1_ESP`, ... environment variables).
 
 ---
 

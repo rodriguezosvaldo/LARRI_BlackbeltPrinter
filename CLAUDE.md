@@ -15,12 +15,13 @@ the PC only stores logs. Parts:
    and the web dashboard.
 2. **`log_server.py`** — PC log receiver (stdlib only, port 5052): the ESP32s POST job-log lines,
    printer replies and load-cell rows; written to `logs/` in the old formats.
-3. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
+3. **`twin/`** — read-only digital twin web app on the PC (stdlib only, port 5053), see below.
+4. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
    heater-control web UI for the print environment. Unrelated to the rest at the code level.
-4. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
+5. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
    each printer's SD card, kept here for reference/version control. `GCODE_CHEATSHEET.md`
    documents the G/M-codes used in them.
-5. **Reference only, not run:** `alarm.py`, `load cel/spool_monitor.py` (+ `.html`,
+6. **Reference only, not run:** `alarm.py`, `load cel/spool_monitor.py` (+ `.html`,
    `spools.json`), `run_alarm.bat` — the previous PC version; `legacy_alarm.py` — an older,
    larger `alarm.py` (stall detection, MCU temp, VIN, heater/filament-sensor faults). When
    porting a check from them, follow the firmware's conventions (`prev*` edge detection,
@@ -109,6 +110,21 @@ match. mDNS names: `bb-p1.local`, `bb-p2.local`. Cells are named `p1_cell1`/`p1_
 `logs/.job_index.json`), `logs/replies_<slug>.jsonl`, `logs/load_cells/<printer>_<date>.csv`
 (header `time,unix,cell1,cell2`, rows not newer than the last written are skipped). Names are
 validated with `SAFE_NAME`. `logs/` is gitignored.
+
+## `twin/` (digital twin)
+
+`twin_server.py` (`ThreadingHTTPServer`, `TWIN_PORT` 5053): one thread per Duet polls
+`rr_model` (`state.status`, `job`, `move.axes`, `sensors.analog`, `heat.heaters`) every 2 s, one per
+ESP32 polls `/api/spools` every 5 s; `GET /api/state` returns both. When `job.file.fileName`
+changes, the G-code is streamed from `rr_download` through `gcode.Parser` (outer walls only,
+points < 1.5 mm apart dropped) and cached gzipped in `twin/cache/<hash>.json.gz`
+(`/api/piece/<p1|p2>`). STLs in `twin/models/` are matched by `job.build.objects` name or G-code
+name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part frame:
+h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
+printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
+`machinePosition`; `G92 Z0` at the start makes it match the G-code). Temps come from
+`sensors.analog` by name (E0, Bed0, Bed1) and DHT sensors 5/6. The repo's `config.g/` files are
+out of date (no DHT `M308`), don't rely on them for sensor numbers.
 
 ## `load cel/calibration.py`
 

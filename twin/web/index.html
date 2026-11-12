@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlackBelt Twin</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #161a1f; --line: #2a3038; --text: #e8ecf0; --muted: #8a94a0;
+    --accent: #ff8a3d; --ok: #3ccf7a; --warn: #f2c14e; --bad: #ef5b5b; --info: #4ea8f2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px 4px; }
+  header h1 { margin: 0; font-size: 1.3rem; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: .85rem; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
+         gap: 16px; padding: 12px 16px 24px; }
+  .printer { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+             overflow: hidden; display: flex; flex-direction: column; }
+  .ph { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .ph h2 { margin: 0; font-size: 1.1rem; flex: 1; }
+  .badge { font-size: .78rem; font-weight: 600; padding: 2px 10px; border-radius: 99px;
+           background: var(--line); color: var(--text); text-transform: uppercase; letter-spacing: .04em; }
+  .badge.processing, .badge.simulating { background: color-mix(in srgb, var(--ok) 25%, transparent); color: var(--ok); }
+  .badge.paused, .badge.pausing, .badge.resuming { background: color-mix(in srgb, var(--warn) 25%, transparent); color: var(--warn); }
+  .badge.offline, .badge.halted { background: color-mix(in srgb, var(--bad) 25%, transparent); color: var(--bad); }
+  .view { position: relative; height: 340px; background: #0a0c0f; border-block: 1px solid var(--line); }
+  .view canvas { display: block; width: 100%; height: 100%; }
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
+             pointer-events: none; text-align: center; padding: 20px; }
+  .vtools { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
+  .vtools button { background: #1f252c; color: var(--muted); border: 1px solid var(--line);
+                   border-radius: 6px; font-size: .75rem; padding: 3px 8px; cursor: pointer; }
+  .vtools button:hover { color: var(--text); }
+  .vtools button[hidden] { display: none; }
+  .vlabel { position: absolute; left: 10px; bottom: 8px; font-size: .75rem; color: var(--muted); }
+  .body { padding: 12px 16px 16px; display: grid; gap: 14px; }
+  .file { font-weight: 600; word-break: break-word; }
+  .muted { color: var(--muted); font-size: .85rem; }
+  .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .big { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: #232a32; border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px;
+             transition: width .6s; }
+  .bar.z > i { background: var(--info); }
+  h3 { margin: 0 0 6px; font-size: .78rem; color: var(--muted); font-weight: 600;
+       text-transform: uppercase; letter-spacing: .06em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+  .tile { background: #1b2026; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .tile .k { font-size: .75rem; color: var(--muted); }
+  .tile .v { font-size: 1.15rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .t { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tile.hot .v { color: var(--accent); }
+  .spool { display: grid; gap: 2px; }
+  .spool .bar > i { background: var(--ok); }
+  .spool.low .bar > i { background: var(--bad); }
+  .tag { font-size: .7rem; padding: 1px 7px; border-radius: 99px; background: #23303a; color: var(--info); }
+  .err { color: var(--bad); font-size: .85rem; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>BlackBelt Twin</h1>
+  <span class="sub" id="updated">connecting…</span>
+</header>
+<main id="printers"></main>
+
+<template id="tpl">
+  <section class="printer">
+    <div class="ph"><h2 data-f="label"></h2><span class="badge" data-f="status">—</span></div>
+    <div class="view">
+      <div class="overlay" data-f="overlay">No job</div>
+      <div class="vtools">
+        <button data-act="source" hidden>Toolpath</button>
+        <button data-act="flip" hidden title="Swap the STL end printed first">Flip STL</button>
+        <button data-act="fit">Fit</button>
+      </div>
+      <div class="vlabel" data-f="vlabel"></div>
+    </div>
+    <div class="body">
+      <div>
+        <div class="file" data-f="file">—</div>
+        <div class="muted" data-f="jobinfo"></div>
+      </div>
+      <div>
+        <div class="row"><h3>Job progress</h3><span class="big" data-f="percent">—</span></div>
+        <div class="bar"><i data-f="percentbar"></i></div>
+      </div>
+      <div>
+        <div class="row"><h3>Belt (Z) — horizontal length printed</h3>
+          <span class="num" data-f="zpct"></span></div>
+        <div class="row"><span class="big" data-f="z">—</span><span class="muted num" data-f="ztotal"></span></div>
+        <div class="bar z"><i data-f="zbar"></i></div>
+      </div>
+      <div>
+        <h3>Filament</h3>
+        <div class="grid">
+          <div class="tile"><div class="k">Job total</div><div class="v" data-f="filtotal">—</div><div class="t" data-f="filtotalkg"></div></div>
+          <div class="tile"><div class="k">Used</div><div class="v" data-f="filused">—</div><div class="t" data-f="filusedkg"></div></div>
+          <div class="tile"><div class="k">Remaining</div><div class="v" data-f="filleft">—</div><div class="t" data-f="filleftkg"></div></div>
+        </div>
+      </div>
+      <div>
+        <h3>Temperatures</h3>
+        <div class="grid">
+          <div class="tile" data-tile="E0"><div class="k">E0</div><div class="v">—</div><div class="t"></div></div>
+          <div class="tile" data-tile="Bed0"><div class="k">Bed 0</div><div class="v">—</div><div class="t"></div></div>
+          <div class="tile" data-tile="Bed1"><div class="k">Bed 1</div><div class="v">—</div><div class="t"></div></div>
+          <div class="tile"><div class="k">DHT temp</div><div class="v" data-f="dhtt">—</div><div class="t">enclosure</div></div>
+          <div class="tile"><div class="k">DHT humidity</div><div class="v" data-f="dhth">—</div><div class="t">enclosure</div></div>
+        </div>
+      </div>
+      <div>
+        <h3>Spools (load cells)</h3>
+        <div class="grid" data-f="spools" style="grid-template-columns: 1fr 1fr"></div>
+        <div class="err" data-f="spoolerr"></div>
+      </div>
+      <div class="err" data-f="error"></div>
+    </div>
+  </section>
+</template>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
