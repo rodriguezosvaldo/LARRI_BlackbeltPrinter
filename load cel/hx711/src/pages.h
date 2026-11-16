@@ -86,7 +86,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           <span class="job p-job">—</span>
           <span class="note">cells <span class="badge p-cells muted">—</span></span>
         </div>
-        <div class="note"><a class="p-calib" href="#">calibration</a> · <a class="p-config" href="#">config</a></div>
+        <div class="note"><a class="p-calib" href="#">calibration</a> · <a class="p-config" href="#">config</a> · <a class="p-update" href="#">firmware</a></div>
       </div>
       <div class="note p-msg" hidden></div>
     </section>
@@ -193,6 +193,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       root.querySelector(".p-label").textContent = `${p.label}${p.ip ? " · " + p.ip : ""}`;
       root.querySelector(".p-calib").href = `${base}/calib`;
       root.querySelector(".p-config").href = `${base}/config`;
+      root.querySelector(".p-update").href = `${base}/update`;
       const cb = root.querySelector(".p-cells");
       setBadge(cb, p.online ? "online" : "offline", p.online ? "ok" : "bad");
       cb.title = p.error || "";
@@ -383,4 +384,52 @@ function save(){
     .catch(e=>msg.textContent='Error: '+e);
 }
 load();
+</script></body></html>)rawliteral";
+
+// Firmware update over WiFi (POST /update, see web.cpp). Same as: pio run -e p1_ota -t upload
+const char UPDATE_HTML[] PROGMEM = R"rawliteral(<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Firmware update</title>
+<style>
+body{font-family:sans-serif;max-width:480px;margin:24px auto;padding:0 16px}
+label{display:block;margin:10px 0}
+input[type=file],input[type=password]{width:100%;padding:6px;font-size:1em;box-sizing:border-box}
+button{font-size:1.1em;padding:10px 18px;margin-top:8px}
+progress{width:100%;margin-top:12px}
+.help{color:#666;font-size:.9em}
+</style></head><body>
+<p><a href="/">&larr; Dashboard</a></p>
+<h2 id="title">Firmware update</h2>
+<p>Running build: <b id="fw">-</b></p>
+<label>Firmware (<code>.pio/build/<span id="env">pX</span>/firmware.bin</code>)<input type="file" id="file" accept=".bin"></label>
+<label>Password (OTA_PASS)<input type="password" id="pass"></label>
+<label><input type="checkbox" id="force"> Update even if the printer has a job (the job log restarts)</label>
+<button id="go" onclick="upload()">Upload</button>
+<progress id="bar" max="100" value="0" hidden></progress>
+<p id="msg"></p>
+<p class="help">The ESP32 reboots after a good upload (about 10 s without dashboard or alerts).
+A bad or wrong-board file is rejected and the current firmware keeps running.</p>
+<script>
+const $=id=>document.getElementById(id);
+function info(){fetch('/api/spools').then(r=>r.json()).then(d=>{
+  $('fw').textContent=d.fw;$('env').textContent=d.self;
+  $('title').textContent='Firmware update — '+d.printers[d.self].label;});}
+function upload(){
+  const f=$('file').files[0];if(!f){$('msg').textContent='Choose a .bin file';return;}
+  const fd=new FormData();fd.append('firmware',f,f.name);
+  const x=new XMLHttpRequest();
+  x.open('POST','/update'+($('force').checked?'?force=1':''));
+  x.setRequestHeader('Authorization','Basic '+btoa('ota:'+$('pass').value));
+  x.upload.onprogress=e=>{if(e.lengthComputable)$('bar').value=e.loaded/e.total*100;};
+  x.onload=()=>{let j={};try{j=JSON.parse(x.responseText);}catch(e){}
+    if(x.status==200){$('msg').textContent='OK, rebooting...';setTimeout(wait,4000);}
+    else{$('msg').textContent='Error: '+(j.error||x.status);$('go').disabled=false;}};
+  x.onerror=()=>{$('msg').textContent='Upload failed (connection)';$('go').disabled=false;};
+  $('go').disabled=true;$('bar').hidden=false;$('bar').value=0;$('msg').textContent='Uploading...';
+  x.send(fd);
+}
+function wait(){fetch('/api/spools').then(r=>r.json()).then(d=>{
+  $('fw').textContent=d.fw;$('msg').textContent='Done, running build '+d.fw;$('go').disabled=false;})
+  .catch(()=>setTimeout(wait,2000));}
+info();
 </script></body></html>)rawliteral";

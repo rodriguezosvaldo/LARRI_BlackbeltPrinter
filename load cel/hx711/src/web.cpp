@@ -1,6 +1,7 @@
 #include "web.h"
 
 #include <ArduinoJson.h>
+#include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
@@ -40,6 +41,7 @@ void handleSpools() {
   doc["rate_window"] = RATE_WINDOW;
   doc["min_rate_span"] = MIN_RATE_SPAN;
   doc["self"] = PRINTER_KEY;
+  doc["fw"] = FW_BUILD;
   doc["peer"] = spoolPeerUrl();
   doc["ready"] = spoolReady();
 
@@ -95,6 +97,61 @@ void handleConfigPost() {
   handleConfigGet();
 }
 
+// ======================= Firmware update over WiFi =======================
+// POST /update[?force=1], multipart file, Basic auth ota:OTA_PASS. Written to the other OTA
+// partition while the current firmware keeps running; the bootloader only switches to it if
+// Update.end() verified it (size, checksum, chip), so a bad upload changes nothing.
+struct {
+  int code = 0;  // 0 = OK so far
+  String error;
+} ota;
+uint32_t rebootAt = 0;  // millis() of the pending restart after a good update, 0 = none
+
+void otaFail(int code, const String& error) {
+  if (ota.code) return;  // keep the first error
+  ota.code = code;
+  ota.error = error;
+  if (Update.isRunning()) Update.abort();
+  Serial.printf("[ota] rejected: %s\n", error.c_str());
+}
+
+void handleUpdateUpload() {
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    ota.code = 0;
+    ota.error = "";
+    if (!strlen(OTA_PASS)) otaFail(403, "OTA disabled: OTA_PASS not set in secrets.h");
+    else if (!server.authenticate("ota", OTA_PASS)) otaFail(401, "wrong password");
+    else if (rebootAt) otaFail(409, "already updated, rebooting");
+    else if (printerBusy() && server.arg("force") != "1")
+      otaFail(409, "printer has a job (printing/paused): wait, or force=1");
+    else if (!Update.begin(UPDATE_SIZE_UNKNOWN)) otaFail(500, Update.errorString());
+    else Serial.printf("[ota] receiving %s\n", up.filename.c_str());
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (!ota.code && Update.write(up.buf, up.currentSize) != up.currentSize)
+      otaFail(500, Update.errorString());
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (!ota.code && !Update.end(true)) otaFail(400, Update.errorString());
+    if (!ota.code) Serial.printf("[ota] %u bytes OK, rebooting\n", up.totalSize);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    otaFail(400, "upload aborted");
+  }
+}
+
+void handleUpdateDone() {
+  JsonDocument doc;
+  if (!ota.code && !Update.isFinished()) otaFail(400, "no firmware file in the request");
+  if (ota.code) {
+    doc["error"] = ota.error;
+    sendJson(ota.code, doc);
+    return;
+  }
+  doc["ok"] = true;
+  doc["previous_build"] = FW_BUILD;
+  sendJson(200, doc);
+  rebootAt = millis() + 1500;  // let the reply (and queued alerts) go out first
+}
+
 }  // namespace
 
 void webBegin() {
@@ -114,8 +171,13 @@ void webBegin() {
     calibCancel();
     sendJson(200, calibJson());
   });
+  server.on("/update", HTTP_GET, [] { server.send_P(200, "text/html", UPDATE_HTML); });
+  server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   server.onNotFound([] { server.send(404, "text/plain", "not found"); });
   server.begin();
 }
 
-void webLoop() { server.handleClient(); }
+void webLoop() {
+  server.handleClient();
+  if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) ESP.restart();
+}

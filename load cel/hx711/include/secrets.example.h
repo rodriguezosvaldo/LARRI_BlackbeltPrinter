@@ -12,6 +12,10 @@
 // disable: alarms and the dashboard work without it.
 // #define LOG_SERVER_URL "http://192.168.1.XX:5052"
 
+// Password for firmware updates over WiFi (/update page, pio run -e p1_ota -t upload).
+// Leave commented out to disable them (USB only).
+// #define OTA_PASS "choose-a-password"
+
 // Optional: the other printer's ESP32, for the dashboard (default in config.h).
 // Can also be changed at runtime from the /config page.
 // #define PEER_URL "http://192.168.1.226"

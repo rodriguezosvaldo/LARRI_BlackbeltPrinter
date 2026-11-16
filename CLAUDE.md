@@ -42,7 +42,9 @@ python log_server.py                 # on the PC (or run_log_server.bat)
 
 **`load cel/hx711/include/secrets.h`** (gitignored; template `secrets.example.h`) defines
 `WIFI_SSID`, `WIFI_PASS`, `NTFY1`, `NTFY2`, optional `LOG_SERVER_URL` (`http://<pc-ip>:5052`,
-empty/undefined = no PC logs) and optional `PEER_URL`. Never commit or echo its contents.
+empty/undefined = no PC logs), optional `PEER_URL` and optional `OTA_PASS` (firmware update
+over WiFi: `pio run -e p1_ota|p2_ota -t upload` runs `ota_upload.py`, which POSTs the .bin to
+`/update` with Basic auth `ota:OTA_PASS`; refused while `printerBusy()` unless `force=1`). Never commit or echo its contents.
 `calibration.py` uses `pyserial` (in `requirements.txt`).
 
 ## Firmware architecture (`load cel/hx711/src/`)
@@ -96,7 +98,8 @@ slow/offline PC or ntfy never delays polling or the web page.
 - **`web.cpp` + `pages.h`**: `/` dashboard (fetches its own `/api/spools` and the peer's, CORS
   open), `/config`, `/calib`, `/api/spools` (same shape as the old `spool_monitor.py` API with
   only this printer, plus `printer`, `self`, `peer`), `/api/config` GET/POST, `/data`,
-  `/calibration`, `/calibration/start|cancel`.
+  `/calibration`, `/calibration/start|cancel`, `/update` (page + POST firmware, `Update` lib,
+  restart 1.5 s after success). `/api/spools` also has `fw` (= build date/time `FW_BUILD`).
 
 Pins: P1 (S3) cell 1 DOUT 17 / SCK 18, cell 2 DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3
 (native USB); P2 (classic) 21/22, 18/19. The ESP32s get their IP by DHCP; `PEER_URL` (or

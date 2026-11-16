@@ -16,6 +16,11 @@
 #define LOG_SERVER_URL ""  // no PC: logs are not saved
 #endif
 
+#ifndef OTA_PASS
+#define OTA_PASS ""  // firmware update over WiFi (/update) disabled
+#endif
+#define FW_BUILD __DATE__ " " __TIME__
+
 #if PRINTER_NUM == 1
 // --- P1-243: ESP32-S3-WROOM-1 ---
 // Avoid GPIO 19/20 (native USB), 26-37 (flash/PSRAM) and 0/3/45/46 (strapping pins).

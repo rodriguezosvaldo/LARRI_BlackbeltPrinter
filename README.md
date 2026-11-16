@@ -74,6 +74,21 @@ Calibration push button: GPIO 4 to GND on both boards.
 
 3. Subscribe to both topics in the ntfy app on your phone.
 
+### Firmware update over WiFi
+
+With `OTA_PASS` defined in `secrets.h` (and flashed once over USB with it), later updates go
+over WiFi:
+
+```bash
+pio run -e p1_ota -t upload    # P1 at 192.168.1.132; --upload-port <ip> if DHCP changed it
+pio run -e p2_ota -t upload    # P2 at 192.168.1.226
+```
+
+or from the browser at `http://<esp32-ip>/update` (the "firmware" link on the dashboard) with
+`.pio/build/<env>/firmware.bin`. The ESP32 refuses while its printer has a job (printing or
+paused), because the reboot restarts the job log; `OTA_FORCE=1` (or the checkbox on the page)
+overrides it. A broken or wrong-board file is rejected and the old firmware keeps running.
+
 The serial monitor (115200 baud) prints the IP, every 10 s the printer state, the alerts sent
 and the job-log lines. The clock comes from NTP (US Eastern time), so the network needs
 internet access (also needed for ntfy).

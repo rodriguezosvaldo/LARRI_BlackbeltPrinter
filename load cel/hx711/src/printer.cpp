@@ -436,6 +436,14 @@ void printerBegin() {
   xTaskCreatePinnedToCore(stateTask, "state", 12288, nullptr, 1, nullptr, 0);
 }
 
+bool printerBusy() {
+  xSemaphoreTake(stateLock, portMAX_DELAY);
+  bool busy = shared.file.length() || isPrinting(shared.status) || isPaused(shared.status) ||
+              shared.status == "resuming";
+  xSemaphoreGive(stateLock);
+  return busy;
+}
+
 void printerStatusJson(JsonObject out) {
   xSemaphoreTake(stateLock, portMAX_DELAY);
   out["url"] = PRINTER_URL;
