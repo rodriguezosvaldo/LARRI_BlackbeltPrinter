@@ -31,6 +31,11 @@ struct {
 bool hasPrevSeqs = false;
 long prevSeqs = 0;
 String prevStatus;  // "" = None
+bool jobPolled = false;  // false until the first job read: no "Print Started" for a job
+                         // already running at boot
+
+// Duet reply when a job starts ("File x.gcode selected for printing")
+const char* const MESSAGE_START_PRINTING = "selected for printing";
 bool prevHasLayer = false;
 long prevLayer = 0;
 
@@ -63,6 +68,14 @@ bool notifyOnce(const String& problem, const String& title, const String& messag
   xSemaphoreGive(notifiedLock);
   notify(title, message, priority, tags);
   return true;
+}
+
+// New print: re-arm M118 alerts so repeated messages notify once per print
+void clearM118() {
+  xSemaphoreTake(notifiedLock, portMAX_DELAY);
+  for (auto it = notified.begin(); it != notified.end();)
+    it = it->startsWith("m118:") ? notified.erase(it) : it + 1;
+  xSemaphoreGive(notifiedLock);
 }
 
 void clearProblem(const String& problem) {
@@ -140,7 +153,9 @@ void checkReply() {
     String reply;
     if (httpGet("/rr_reply", reply, false)) {
       reply.trim();
-      if (reply.length()) {
+      if (reply.indexOf(MESSAGE_START_PRINTING) >= 0) {
+        saveLastReply(reply);  // "Print Started" is sent by checkJobLog
+      } else if (reply.length()) {
         notifyOnce("m118:" + reply, "New M118 Message",
                    String(PRINTER_SLUG) + "\nMessage: " + reply, "default", "warning");
         saveLastReply(reply);
@@ -170,18 +185,21 @@ String checkStateStatus() {
   String status = ok ? doc["result"].as<String>() : String();
   const String last = prevStatus;
   const char* slug = PRINTER_SLUG;
+  // Polled every 10 s: "pausing" and "resuming" may or may not be seen. Normal end
+  // (processing -> idle) and cancel are notified by checkJobLog, which knows the result.
   if (ok && status != last && last.length()) {
     if (status == "halted") {
       notify("Printer Halted", String(slug) + "\nstate " + last + " -> halted (emergency stop)",
              "urgent", "rotating_light");
-    } else if (status == "paused" && !isPaused(last)) {
+    } else if (isPaused(status) && !isPaused(last)) {
       notify("Print Paused",
-             String(slug) + "\nstate " + last + " -> paused\nCurrent layer: " + layerText() + "\n",
+             String(slug) + "\nstate " + last + " -> " + status + "\nCurrent layer: " +
+                 layerText() + "\n",
              "high", "pause_button");
-    } else if (status == "resuming") {
-      notify("Print Resuming", String(slug) + "\nstate " + last + " -> resuming", "default",
+    } else if (status == "resuming" || (isPrinting(status) && isPaused(last))) {
+      notify("Print Resuming", String(slug) + "\nstate " + last + " -> " + status, "default",
              "arrow_forward");
-    } else if (isPrinting(last) && isStopped(status)) {
+    } else if (isPrinting(last) && isStopped(status) && status != "idle") {
       notify("Print Stopped", String(slug) + "\nstate " + last + " -> " + status, "urgent",
              "octagonal_sign,warning");
     }
@@ -214,6 +232,12 @@ struct JobLog {
 void jobWrite(const String& line) {
   Serial.printf("[job] %s\n", line.c_str());
   pclogJobLine(jobLog.key, jobLog.base, line);
+}
+
+// "0:/gcodes/My part.gcode" -> "My part.gcode"
+String jobFileName(String fileName) {
+  fileName.replace('\\', '/');
+  return fileName.substring(fileName.lastIndexOf('/') + 1);
 }
 
 // "dir/My part.gcode" -> "My_part" (Path.stem + re.sub(r"[^\w.-]+", "_", ...))
@@ -300,6 +324,14 @@ void jobLogEnd(JsonVariantConst job, time_t now) {
   if (!total) total = difftime(now, jobLog.start);
   jobWrite("END     " + fmtDt(now) + "  " + result + " | total " + fmtDuration(total) +
            " | paused " + fmtDuration(jobLog.pausedTotal));
+  bool finished = !strcmp(result, "finished");
+  const char* title = finished ? "Print Finished"
+                      : result[0] == 'c' ? "Print Cancelled"
+                                         : "Print Aborted";
+  notify(title,
+         String(PRINTER_NAME) + " (" + PRINTER_SLUG + ")\nJob: " + jobFileName(jobLog.file) +
+             "\nTotal " + fmtDuration(total) + " | paused " + fmtDuration(jobLog.pausedTotal),
+         finished ? "default" : "high", finished ? "white_check_mark" : "octagonal_sign");
   jobLog.active = false;
 }
 
@@ -328,8 +360,17 @@ void checkJobLog(const String& status) {
   shared.file = fileName;
   xSemaphoreGive(stateLock);
 
+  bool firstPoll = !jobPolled;
+  jobPolled = true;
   if (!fn) return;
-  if (!jobLog.active) jobLogStart(fileName, job["duration"].as<double>(), now);
+  if (!jobLog.active) {
+    jobLogStart(fileName, job["duration"].as<double>(), now);
+    clearM118();
+    if (!firstPoll)
+      notify("Print Started",
+             String(PRINTER_NAME) + " (" + PRINTER_SLUG + ")\nJob: " + jobFileName(fileName),
+             "default", "printer");
+  }
 
   if (isPaused(status) && !jobLog.pauseStart) {
     jobLog.pauseStart = now;
