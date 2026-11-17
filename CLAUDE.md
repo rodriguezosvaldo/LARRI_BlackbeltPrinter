@@ -129,7 +129,9 @@ name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part fr
 h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
 printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
 `machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
-`timesLeft.filament`), like DWC.
+`timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
+`logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
+shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
 
 ## `load cel/calibration.py`
 

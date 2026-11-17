@@ -26,6 +26,7 @@ function fmtDur(s) {
   const mm = `${String(m).padStart(2, "0")}min`;
   return d ? `${d}d ${h}h ${mm}` : h ? `${h}h ${mm}` : `${m}min`;
 }
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const cnt = (v) => (v == null ? "—" : Math.round(v).toLocaleString("en-US"));
 // When the spool runs out, e.g. "Today 18:40" or "Wed, Nov 19 22:25"
 function fmtEta(h) {
@@ -488,13 +489,33 @@ class Card {
 
     // job
     this.set("file", job ? job.file.replace(/\.gcode$/i, "") : "—");
-    const end = job?.time_left != null ? new Date(Date.now() + job.time_left * 1000) : null;
-    const endTxt = end ? end.toLocaleString(undefined, {
-      weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
-    this.f.jobinfo.innerHTML = job
-      ? `elapsed ${fmtDur(job.duration)} · left ≈ ${fmtDur(job.time_left)}` +
-        (endTxt ? ` · <b class="end">end ≈ ${endTxt}</b>` : "")
+    const fmtEnd = (s) => new Date(Date.now() + s * 1000).toLocaleString(undefined, {
+      weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const endTxt = job?.time_left != null ? fmtEnd(job.time_left) : null;
+    // Historic end: average real printing time of this part (logs/print_time_history.csv) minus
+    // the printing time so far (Duet job.duration, which excludes pauses like print_min does)
+    const h = job?.history && { ...job.history, part: escHtml(job.history.part) };
+    let histHtml = "";
+    if (h && !h.count) {
+      histHtml = `<span class="hist none" title="No completed ${h.part} print in ` +
+        `print_time_history.csv yet: the historic end appears after the first one.">` +
+        `no history for ${h.part}</span>`;
+    } else if (h && job.duration != null) {
+      const left = h.avg_print_s - job.duration;
+      const tip = `Average real printing time (pauses excluded) of ${h.count} completed ` +
+        `${h.part} print${h.count > 1 ? "s" : ""} in print_time_history.csv: ` +
+        `${fmtDur(h.avg_print_s)}. End = now + average − printing time so far ` +
+        `(${fmtDur(job.duration)}); pauses from now on push it later.`;
+      histHtml = `<b class="hist" title="${tip}">` + (left > 0
+        ? `historic end ≈ ${fmtEnd(left)}`
+        : `historic avg passed (${fmtDur(-left)} over)`) + "</b>";
+    }
+    const info = job
+      ? `<span>elapsed ${fmtDur(job.duration)} · left ≈ ${fmtDur(job.time_left)}` +
+        (endTxt ? ` · <b class="end">end ≈ ${endTxt}</b>` : "") + `</span>` + histHtml
       : "";
+    // Only when it changed (about once a minute): rewriting it every poll closes the tooltip
+    if (info !== this.jobInfo) this.f.jobinfo.innerHTML = this.jobInfo = info;
 
     // spools (same logic as the ESP32 spool monitor, load cel/hx711/src/pages.h), always shown
     for (const [name, c] of Object.entries(p.spools || {})) this.renderSpool(name, c, p.esp);
