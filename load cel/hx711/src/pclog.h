@@ -9,6 +9,9 @@ void pclogBegin();
 
 // key = unique id of the print (base + start time); the PC picks the file name from base
 void pclogJobLine(const String& key, const String& base, const String& line);
+// One row of logs/print_time_history.csv, sent when a print completes (the PC derives the part)
+void pclogHistory(const String& key, const String& job, uint32_t start, uint32_t end,
+                  uint32_t paused);
 void pclogReply(const String& line);
 void pclogCells(uint32_t t, long c1, long c2);
 

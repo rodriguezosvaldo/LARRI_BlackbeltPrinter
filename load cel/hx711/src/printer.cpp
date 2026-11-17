@@ -227,7 +227,12 @@ struct JobLog {
   // Filament consumption: summed positive deltas of job.rawExtrusion
   bool hasSample = false;
   double firstSample = 0, lastRaw = 0, lastTime = 0, extruded = 0;
+  double needed = 0;  // sum of job.file.filament (mm), 0 = unknown
 } jobLog;
+
+// Share of the G-code's filament the Duet extruded (job.rawExtrusion counts from the job start,
+// so a print resumed mid-file stays well below this)
+const double COMPLETE_MIN_FRACTION = 0.95;
 
 void jobWrite(const String& line) {
   Serial.printf("[job] %s\n", line.c_str());
@@ -325,6 +330,18 @@ void jobLogEnd(JsonVariantConst job, time_t now) {
   jobWrite("END     " + fmtDt(now) + "  " + result + " | total " + fmtDuration(total) +
            " | paused " + fmtDuration(jobLog.pausedTotal));
   bool finished = !strcmp(result, "finished");
+  // Print time history (PC): only prints run from start to end
+  bool complete = !jobLog.needed || !jobLog.hasSample ||
+                  jobLog.lastRaw >= COMPLETE_MIN_FRACTION * jobLog.needed;
+  if (finished && complete) {
+    String name = jobFileName(jobLog.file);
+    int dot = name.lastIndexOf('.');
+    if (dot > 0) name = name.substring(0, dot);
+    pclogHistory(jobLog.key, name, jobLog.start, now, lround(jobLog.pausedTotal));
+  } else if (finished) {
+    Serial.printf("[job] not in history: extruded %.0f of %.0f mm (resumed mid-file?)\n",
+                  jobLog.lastRaw, jobLog.needed);
+  }
   const char* title = finished ? "Print Finished"
                       : result[0] == 'c' ? "Print Cancelled"
                                          : "Print Aborted";
@@ -341,6 +358,7 @@ void checkJobLog(const String& status) {
   JsonDocument filter;
   JsonObject f = filter["result"].to<JsonObject>();
   f["file"]["fileName"] = true;
+  f["file"]["filament"] = true;
   f["duration"] = true;
   f["rawExtrusion"] = true;
   f["lastDuration"] = true;
@@ -379,6 +397,9 @@ void checkJobLog(const String& status) {
     jobLogResume(now);
   }
   if (!job["rawExtrusion"].isNull()) jobLogSample(job["rawExtrusion"].as<double>(), now);
+  double needed = 0;
+  for (JsonVariantConst v : job["file"]["filament"].as<JsonArrayConst>()) needed += v.as<double>();
+  if (needed > 0) jobLog.needed = needed;
 }
 
 // Alert once per spool when the time left drops below FILAMENT_LOW_HOURS

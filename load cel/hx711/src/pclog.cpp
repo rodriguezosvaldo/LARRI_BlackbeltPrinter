@@ -22,7 +22,7 @@ const unsigned long CELLS_SEND_MS = 60000;   // send readings once a minute
 const unsigned long RETRY_MS = 30000;        // after a failed request
 
 struct Event {
-  const char* path;  // "/job" or "/reply"
+  const char* path;  // "/job", "/history" or "/reply"
   String body;       // JSON
 };
 struct Row {
@@ -83,6 +83,18 @@ void pclogJobLine(const String& key, const String& base, const String& line) {
   doc["base"] = base;
   doc["line"] = line;
   addEvent("/job", doc);
+}
+
+void pclogHistory(const String& key, const String& job, uint32_t start, uint32_t end,
+                  uint32_t paused) {
+  JsonDocument doc;
+  doc["printer"] = PRINTER_KEY;
+  doc["key"] = key;
+  doc["job"] = job;
+  doc["start"] = start;
+  doc["end"] = end;
+  doc["paused"] = paused;
+  addEvent("/history", doc);
 }
 
 void pclogReply(const String& line) {

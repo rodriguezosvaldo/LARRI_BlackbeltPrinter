@@ -6,6 +6,9 @@ The ESP32s do all the monitoring (alarms, spool monitor, dashboard) and just sen
 here, written to logs/ in the same format the old alarm.py / spool_monitor.py used:
 
     POST /job          {"key", "base", "line"}   -> logs/<base>.log  (_2, _3... for a repeat print that day)
+    POST /history      {"printer", "key", "job", "start", "end", "paused"}
+                                                 -> one row of logs/print_time_history.csv
+                                                    (completed prints only)
     POST /reply        {"slug", "line"}          -> logs/replies_<slug>.jsonl
     POST /cells        {"printer", "rows": [[unix, cell1, cell2], ...]}
                                                  -> logs/load_cells/<printer>_<date>.csv
@@ -88,6 +91,66 @@ def write_reply(data: dict) -> None:
     print(f"[reply {slug}] {line}")
 
 
+# ============================ Print time history ============================
+HISTORY_FILE = LOG_DIR / "print_time_history.csv"
+HISTORY_HEADER = ["printer", "job_name", "part", "start", "end",
+                  "days", "hours", "minutes", "total_min", "paused_min", "print_min", "key"]
+JOB_PREFIX = re.compile(r"^\d+_\d+_[^_]+_(?:V_)?")  # "35_09_3DXTECH_V_"
+
+
+def part_name(job: str) -> str:
+    """Part type from the job name: after the prefix, the capitalized words before the first
+    " - ", number or lowercase word.
+        35_09_3DXTECH_V_Top Brace Squared - recess support 10-15  -> Top_Brace_Squared
+        35_09_3DXTECH_V_Bottom Brace 5mm gap support 8-23 60deg bed -> Bottom_Brace
+        35_09_3DXTECH_V_Top Brace v1.1 kady                        -> Top_Brace
+    """
+    name = JOB_PREFIX.sub("", job.strip()).replace("_", " ")
+    name = name.split(" - ")[0]
+    words = []
+    for w in name.split():
+        if not w[0].isupper() or any(c.isdigit() for c in w):
+            break
+        words.append(w)
+    return "_".join(words) or job.strip()
+
+
+def history_has(key: str) -> bool:
+    # The ESP32 resends if it lost the reply: skip a print already written
+    try:
+        with HISTORY_FILE.open(newline="", encoding="utf-8-sig") as f:
+            return any(row.get("key") == key for row in csv.DictReader(f))
+    except OSError:
+        return False
+
+
+def write_history(data: dict) -> None:
+    printer, key, job = str(data["printer"]), str(data["key"]), str(data["job"])
+    if printer not in PRINTERS:
+        raise ValueError(f"bad printer {printer!r}")
+    start, end, paused = int(data["start"]), int(data["end"]), int(data.get("paused", 0))
+    total_min = max(0, end - start) // 60
+    print_min = max(0, end - start - paused) // 60  # real printing time, pauses removed
+    days, rest = divmod(total_min, 24 * 60)
+    hours, minutes = divmod(rest, 60)
+    fmt = "%Y-%m-%d %H:%M"
+    row = [printer, job, part_name(job),
+           datetime.fromtimestamp(start).strftime(fmt), datetime.fromtimestamp(end).strftime(fmt),
+           days, hours, minutes, total_min, paused // 60, print_min, key]
+    with lock:
+        if history_has(key):
+            return
+        LOG_DIR.mkdir(exist_ok=True)
+        new = not HISTORY_FILE.exists() or HISTORY_FILE.stat().st_size == 0
+        # utf-8-sig: BOM so Excel reads the file as UTF-8
+        with HISTORY_FILE.open("a", newline="", encoding="utf-8-sig" if new else "utf-8") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(HISTORY_HEADER)
+            w.writerow(row)
+    print(f"[history] {printer} {row[2]}: {days}d {hours}h {minutes}m")
+
+
 # ============================ Load-cell CSV ============================
 def cell_path(printer: str, day: datetime) -> Path:
     return CELL_DIR / f"{printer}_{day:%Y-%m-%d}.csv"
@@ -152,7 +215,8 @@ def recent_cells(printer: str, seconds: float) -> str:
 
 
 # ============================ HTTP ============================
-POST_ROUTES = {"/job": write_job, "/reply": write_reply, "/cells": write_cells}
+POST_ROUTES = {"/job": write_job, "/history": write_history, "/reply": write_reply,
+               "/cells": write_cells}
 
 
 class Handler(BaseHTTPRequestHandler):

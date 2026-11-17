@@ -111,8 +111,11 @@ match. mDNS names: `bb-p1.local`, `bb-p2.local`. Cells are named `p1_cell1`/`p1_
 
 `ThreadingHTTPServer` on `LOG_SERVER_PORT` (5052). Writes `logs/<base>.log` (index in
 `logs/.job_index.json`), `logs/replies_<slug>.jsonl`, `logs/load_cells/<printer>_<date>.csv`
-(header `time,unix,cell1,cell2`, rows not newer than the last written are skipped). Names are
-validated with `SAFE_NAME`. `logs/` is gitignored.
+(header `time,unix,cell1,cell2`, rows not newer than the last written are skipped) and
+`logs/print_time_history.csv` (one row per completed print from `POST /history`, sent by
+`jobLogEnd` only if `finished` and `rawExtrusion` ≥ 95% of `job.file.filament`, so prints
+resumed mid-file are left out; `part_name()` = capitalized words after the `35_09_3DXTECH_V_`
+prefix, before ` - `/a number/a lowercase word, joined by `_`; duplicates skipped by `key`). Names are validated with `SAFE_NAME`. `logs/` is gitignored.
 
 ## `twin/` (digital twin)
 
