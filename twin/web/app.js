@@ -16,6 +16,11 @@ const DEFAULT_GANTRY_ANGLE = 35;
 const COLORS = { printed: 0xff8a3d, ghost: 0x6b7785, belt: 0x20262d, plane: 0x4ea8f2,
                  dimTotal: 0x6b7785, dimDone: 0xff8a3d }; // same as ghost / printed piece
 const AXES = { x: 0, y: 1, z: 2 };
+// Tooltip of "end ≈" in the job line (&#10; = line break inside the title attribute)
+const END_HINT = "Now + Duet job.timesLeft.filament (filament-based estimate).&#10;" +
+  "fraction = rawExtrusion / filament total from the G-code header&#10;" +
+  "left ≈ elapsed × (1 − fraction) / fraction&#10;" +
+  "Adapts to the real speed; unreliable in the first minutes. Updated every 2 s.";
 
 // ============================ formatting ============================
 const num = (v, d = 1) => (v == null || isNaN(v) ? "—" : Number(v).toFixed(d));
@@ -493,7 +498,7 @@ class Card {
       weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
     this.f.jobinfo.innerHTML = job
       ? `elapsed ${fmtDur(job.duration)} · left ≈ ${fmtDur(job.time_left)}` +
-        (endTxt ? ` · <b class="end">end ≈ ${endTxt}</b>` : "")
+        (endTxt ? ` · <b class="end" title="${END_HINT}">end ≈ ${endTxt}</b>` : "")
       : "";
 
     // spools (same logic as the ESP32 spool monitor, load cel/hx711/src/pages.h), always shown
