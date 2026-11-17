@@ -11,12 +11,14 @@ The G-code of a new job is downloaded once from the Duet (rr_download, ~2 min fo
 reduced piece is cached in twin/cache/. Nothing is ever sent to the printers besides these GETs.
 """
 
+import csv
 import gzip
 import hashlib
 import io
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -25,6 +27,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import gcode
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from log_server import HISTORY_FILE, part_name  # noqa: E402  (same part rule as the CSV)
 
 PORT = int(os.getenv("TWIN_PORT", "5053"))
 PRINTERS = {
@@ -60,6 +65,38 @@ state: dict = {}  # printer key -> state dict for /api/state
 pieces: dict = {}  # printer key -> gzipped JSON of the current piece
 cell_log: dict = {}  # "p1/cell1" -> {"values": {...}, "updated": unix | None, "since": unix}
 cell_log_lock = threading.Lock()
+history_lock = threading.Lock()
+history_cache: dict = {"mtime": None, "parts": {}}  # part -> (sum of print_min, count)
+
+
+def history_for(part: str) -> dict | None:
+    """Average real printing time (pauses excluded) of this part in logs/print_time_history.csv,
+    re-read when the file changes."""
+    with history_lock:
+        try:
+            mtime = HISTORY_FILE.stat().st_mtime
+        except OSError:
+            return None
+        if mtime != history_cache["mtime"]:
+            parts: dict = {}
+            try:
+                with HISTORY_FILE.open(newline="", encoding="utf-8-sig") as f:
+                    for row in csv.DictReader(f):
+                        try:
+                            minutes = float(row["print_min"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        s = parts.setdefault(part_name(row.get("job_name") or ""), [0.0, 0])
+                        s[0] += minutes
+                        s[1] += 1
+            except OSError as e:
+                print(f"[history] can't read {HISTORY_FILE.name}: {e}")
+                return None
+            history_cache.update(mtime=mtime, parts=parts)
+        s = history_cache["parts"].get(part)
+    if not s:
+        return {"part": part, "count": 0, "avg_print_s": None}
+    return {"part": part, "count": s[1], "avg_print_s": round(s[0] / s[1] * 60)}
 
 
 def load_cell_log() -> None:
@@ -134,6 +171,7 @@ def job_view(job: dict) -> dict | None:
         "filament_total_mm": total_mm,
         "filament_used_mm": used_mm,
         "objects": [o.get("name") for o in ((job.get("build") or {}).get("objects") or []) if o],
+        "history": history_for(part_name(Path(path.rsplit("/", 1)[-1]).stem)),
     }
 
 

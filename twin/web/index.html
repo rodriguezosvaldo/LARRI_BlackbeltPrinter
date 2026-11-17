@@ -48,7 +48,10 @@
   .file { font-weight: 600; word-break: break-word; }
   .muted { color: var(--muted); font-size: .85rem; }
   .end { color: var(--ok); font-weight: 700; cursor: help; }
-  .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .jobinfo { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+  .hist { margin-left: auto; color: var(--info); font-weight: 700; cursor: help;
+          border-bottom: 1px dotted color-mix(in srgb, var(--info) 60%, transparent); }
+  .hist.none { color: var(--muted); font-weight: 400; border-bottom-color: var(--line); }  .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
   .big { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .num { font-variant-numeric: tabular-nums; }
   .bar { height: 10px; background: #232a32; border-radius: 99px; overflow: hidden; margin-top: 6px; }
@@ -115,7 +118,7 @@
     <div class="body">
       <div>
         <div class="file" data-f="file">—</div>
-        <div class="muted" data-f="jobinfo"></div>
+        <div class="muted jobinfo" data-f="jobinfo"></div>
       </div>
       <div>
         <h3>Spools (load cells)</h3>

@@ -111,8 +111,11 @@ match. mDNS names: `bb-p1.local`, `bb-p2.local`. Cells are named `p1_cell1`/`p1_
 
 `ThreadingHTTPServer` on `LOG_SERVER_PORT` (5052). Writes `logs/<base>.log` (index in
 `logs/.job_index.json`), `logs/replies_<slug>.jsonl`, `logs/load_cells/<printer>_<date>.csv`
-(header `time,unix,cell1,cell2`, rows not newer than the last written are skipped). Names are
-validated with `SAFE_NAME`. `logs/` is gitignored.
+(header `time,unix,cell1,cell2`, rows not newer than the last written are skipped) and
+`logs/print_time_history.csv` (one row per completed print from `POST /history`, sent by
+`jobLogEnd` only if `finished` and `rawExtrusion` ≥ 95% of `job.file.filament`, so prints
+resumed mid-file are left out; `part_name()` = capitalized words after the `35_09_3DXTECH_V_`
+prefix, before ` - `/a number/a lowercase word, joined by `_`; duplicates skipped by `key`). Names are validated with `SAFE_NAME`. `logs/` is gitignored.
 
 ## `twin/` (digital twin)
 
@@ -126,7 +129,9 @@ name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part fr
 h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
 printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
 `machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
-`timesLeft.filament`), like DWC.
+`timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
+`logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
+shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
 
 ## `load cel/calibration.py`
 
