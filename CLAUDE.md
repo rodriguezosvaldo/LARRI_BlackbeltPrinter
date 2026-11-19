@@ -138,7 +138,11 @@ points < 1.5 mm apart dropped) and cached gzipped in `twin/cache/<hash>.json.gz`
 (`/api/piece/<p1|p2>`). STLs in `twin/models/` are matched by `job.build.objects` name or G-code
 name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part frame:
 h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
-printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
+printers; verified with a real file). Views per printer: **3D** (default) / **Top** = a rough
+printer model (`PRINTER` sizes, mm) with only the printed part, moved along the belt from the
+nozzle line (part → printer = 180° turn about the vertical, not a mirror), spools sized by the
+load-cell % (green = feeding, red = not), the length already out of the printer, and an animated
+nozzle line on the gantry plane; **Part** = the piece alone, printed + still to print. Printed = layers with G-code Z ≤ belt Z (Duet
 `machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
 `timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
 `logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
