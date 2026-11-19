@@ -9,3 +9,4 @@ load cel/calibration_*.log
 twin/cache/
 twin/cell_updates.json
 temporal gcodes
+temporal_servo_test/
