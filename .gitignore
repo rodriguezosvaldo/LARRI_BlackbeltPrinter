@@ -6,3 +6,7 @@ logs/
 load cel/hx711/include/secrets.h
 dht22_secrets.h
 load cel/calibration_*.log
+twin/cache/
+twin/cell_updates.json
+temporal gcodes
+temporal_servo_test/
