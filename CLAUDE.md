@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monitoring and configuration for two BlackBelt 3D printers (Duet 3 MB 6HC mainboard + 3HC
 expansion board, RepRapFirmware) at `192.168.1.243` (printer 1) and `192.168.1.188`
-(printer 2). On branch `all_in_esp32` all monitoring runs on the ESP32s (one per printer);
+(printer 2). All monitoring runs on the ESP32s (one per printer);
 the PC only stores logs. Parts:
 
 1. **`load cel/hx711/`** — PlatformIO firmware, one build per printer (`pio run -e p1` / `-e p2`):

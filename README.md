@@ -8,7 +8,7 @@ Monitoring, alerting and configuration for the lab's two **BlackBelt 3D printers
 | 1       | `192.168.1.243` | ESP32-S3, `192.168.1.132` (`bb-p1.local`) | `NTFY1` |
 | 2       | `192.168.1.188` | classic ESP32, `192.168.1.226` (`bb-p2.local`) | `NTFY2` |
 
-**Branch `all_in_esp32`:** each printer's ESP32 does all the monitoring by itself (alarms,
+Each printer's ESP32 does all the monitoring by itself (alarms,
 spool monitor, dashboard). No PC is needed for alerts; a PC on the same network only stores
 the logs (`log_server.py`). The previous PC version (`alarm.py` + `load cel/spool_monitor.py`)
 is still in the repo for reference but is not run.
