@@ -95,13 +95,13 @@ const double CALIB_MAX_STD = 1000;  // counts - above this the spool wasn't at r
 
 // ============================ Spool monitor ============================
 const long RATE_WINDOW = 7200;        // s - live rate = slope over the last 2 hours
-const long MIN_RATE_SPAN = 600;       // s - need at least 10 min of data before showing a live rate
+const long MIN_RATE_SPAN = 300;       // s - need at least 5 min of data before showing a live rate
 const long CURRENT_WINDOW = 60;       // s - fallback "current" = mean of the last minute
 // While consuming, "current" = the fitted line's value now. If it differs from the last-minute
 // mean by more than this, the window doesn't follow one straight line (print start/stop, pause,
 // tension step) and the last-minute mean is used.
 const double FIT_MAX_DEVIATION = 5000;   // counts
-const double MIN_CONSUMING_RATE = 1000;  // counts/h - below this the spool is idle (~2 m/h)
+const double MIN_CONSUMING_RATE = 2500;  // counts/h - below this the spool is idle
 const double JUMP_THRESHOLD = 100000;    // counts - jump vs. recent median = spool changed/removed
 const int JUMP_CONFIRM = 3;              // consecutive jumped readings before resetting the history
 // While printing, filament tension lowers the reading by ~10k-20k counts. full/empty are
@@ -112,5 +112,5 @@ const long TENSION_OFFSET = 15000;       // counts
 const unsigned long REQUEST_REPLY_MS = 500;    // seqs.reply poll (firmware keeps a reply ~1 s)
 const unsigned long REQUEST_STATE_MS = 10000;  // layer / state / job log / filament checks
 const double FILAMENT_LOW_HOURS = 2.0;    // alert when a spool has less than this left
-const double FILAMENT_CLEAR_HOURS = 2.5;  // re-arm the alert above this (new spool)
+const double FILAMENT_CLEAR_HOURS = 10;  // re-arm the alert above this
 const double FILAMENT_DIAMETER = 1.75;    // mm - for volumetric rate in the job log
