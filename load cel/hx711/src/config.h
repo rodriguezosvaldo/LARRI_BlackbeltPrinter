@@ -31,6 +31,7 @@ const int HX2_SCK  = 16;
 #define PRINTER_KEY   "p1"
 #define PRINTER_NAME  "Printer 1"
 #define PRINTER_LABEL "Printer 1 (243)"
+#define PRINTER_SHORT "P1 (243)"         // ntfy messages
 #define PRINTER_SLUG  "192.168.1.243"
 #define NTFY_URL      NTFY1
 #define HOSTNAME      "bb-p1"
@@ -55,6 +56,7 @@ const int HX2_SCK  = 19;
 #define PRINTER_KEY   "p2"
 #define PRINTER_NAME  "Printer 2"
 #define PRINTER_LABEL "Printer 2 (188)"
+#define PRINTER_SHORT "P2 (188)"         // ntfy messages
 #define PRINTER_SLUG  "192.168.1.188"
 #define NTFY_URL      NTFY2
 #define HOSTNAME      "bb-p2"
@@ -114,3 +116,8 @@ const unsigned long REQUEST_STATE_MS = 10000;  // layer / state / job log / fila
 const double FILAMENT_LOW_HOURS = 2.0;    // alert when a spool has less than this left
 const double FILAMENT_CLEAR_HOURS = 10;  // re-arm the alert above this
 const double FILAMENT_DIAMETER = 1.75;    // mm - for volumetric rate in the job log
+// Part leaving the printer: the belt carries the first printed end from the nozzle line (belt Z
+// = 0 after the start G92 Z0) to the front edge PRINTER_FRONT_MM ahead (twin PRINTER.front).
+// One ntfy per job when belt Z (move.axes Z machinePosition) reaches front − warn distance.
+const double PRINTER_FRONT_MM = 800;      // nozzle line -> front edge of the belt
+const double PART_EDGE_WARN_MM = 10;      // warn this much before the part reaches the edge

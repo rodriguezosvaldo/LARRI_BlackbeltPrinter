@@ -59,7 +59,7 @@ over WiFi: `pio run -e p1_ota|p2_ota -t upload` runs `ota_upload.py`, which POST
 ## Firmware architecture (`load cel/hx711/src/`)
 
 `config.h` holds everything per printer, chosen by `-D PRINTER_NUM` (pins, `PRINTER_URL`,
-`NTFY_URL`, `PRINTER_KEY` p1/p2, `PEER_URL`, cell defaults from the old `spools.json`) and the
+`NTFY_URL`, `PRINTER_KEY` p1/p2, `PRINTER_SHORT` `P1 (243)`/`P2 (188)` (printer name in ntfy messages), `PEER_URL`, cell defaults from the old `spools.json`) and the
 constants ported from the Python (`RATE_WINDOW`, `JUMP_THRESHOLD`, `TENSION_OFFSET`,
 `FILAMENT_LOW_HOURS`, ...). Keep both printers' blocks in sync when adding a setting.
 
@@ -71,7 +71,7 @@ slow/offline PC or ntfy never delays polling or the web page.
 - **`printer.cpp`** (port of `alarm.py`, for this ESP32's printer only): `checkReply`
   (`seqs.reply` change → `/rr_reply` → logged on the PC only, no ntfy: pause/resume come from
   `checkStateStatus`, print start/end from `checkJobLog`), and every 10 s `checkLayer`
-  → `checkStateStatus` → `checkJobLog` → `checkFilamentTime`. All Duet reads go through
+  → `checkStateStatus` → `checkJobLog` → `checkPartEdge` → `checkFilamentTime`. All Duet reads go through
   `duetModel()` = `GET {PRINTER_URL}/rr_model?key=...` (ArduinoJson, with a filter for `job`).
   See the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
   and `isPrinting`/`isStopped` for the state vocabulary.
@@ -85,6 +85,10 @@ slow/offline PC or ntfy never delays polling or the web page.
     and maps `key` (base + start unix) to it. Extruded length = sum of positive
     `job.rawExtrusion` deltas. A new job also sends the "Print Started" ntfy, skipped on the
     first job read after boot (`jobPolled`) so a print already running isn't announced.
+  - `checkPartEdge`: while printing, reads belt Z (`move.axes` Z `machinePosition`, ≈ 0 at the
+    start by `G92 Z0`) and, once per job, notifies "Part Reaching Edge" (+ `EDGE` job-log line)
+    when it reaches `PRINTER_FRONT_MM` − `PART_EDGE_WARN_MM`; skipped if a job running at boot
+    is already past it.
   - `checkFilamentTime` reads the spool module directly: only cells with `consuming`, using
     `hours_left_live`, skipping cells at/below `empty` (+ tension offset); key
     `filament_low:cellN`, re-armed above `FILAMENT_CLEAR_HOURS`.

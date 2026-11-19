@@ -163,7 +163,7 @@ String checkStateStatus() {
   bool ok = duetModel("state.status", "d99nfo", doc) && doc["result"].is<const char*>();
   String status = ok ? doc["result"].as<String>() : String();
   const String last = prevStatus;
-  const char* slug = PRINTER_SLUG;
+  const char* slug = PRINTER_SHORT;
   // Polled every 10 s: "pausing" and "resuming" may or may not be seen. Normal end
   // (processing -> idle) and cancel are notified by checkJobLog, which knows the result.
   if (ok && status != last && last.length()) {
@@ -184,7 +184,7 @@ String checkStateStatus() {
     }
   }
   if (ok) prevStatus = status;
-  Serial.printf("%s_state_status: %s\n", slug, ok ? status.c_str() : "None");
+  Serial.printf("%s_state_status: %s\n", PRINTER_SLUG, ok ? status.c_str() : "None");
 
   xSemaphoreTake(stateLock, portMAX_DELAY);
   shared.online = ok;
@@ -207,6 +207,9 @@ struct JobLog {
   bool hasSample = false;
   double firstSample = 0, lastRaw = 0, lastTime = 0, extruded = 0;
   double needed = 0;  // sum of job.file.filament (mm), 0 = unknown
+  bool startedMidPrint = false;  // job already running at boot (first job read)
+  bool edgeChecked = false;  // belt Z read at least once for this job
+  bool edgeWarned = false;   // "part reaching the edge" handled for this job
 } jobLog;
 
 // Share of the G-code's filament the Duet extruded (job.rawExtrusion counts from the job start,
@@ -325,7 +328,7 @@ void jobLogEnd(JsonVariantConst job, time_t now) {
                       : result[0] == 'c' ? "Print Cancelled"
                                          : "Print Aborted";
   notify(title,
-         String(PRINTER_NAME) + " (" + PRINTER_SLUG + ")\nJob: " + jobFileName(jobLog.file) +
+         String(PRINTER_SHORT) + "\nJob: " + jobFileName(jobLog.file) +
              "\nTotal " + fmtDuration(total) + " | paused " + fmtDuration(jobLog.pausedTotal),
          finished ? "default" : "high", finished ? "white_check_mark" : "octagonal_sign");
   jobLog.active = false;
@@ -362,9 +365,10 @@ void checkJobLog(const String& status) {
   if (!fn) return;
   if (!jobLog.active) {
     jobLogStart(fileName, job["duration"].as<double>(), now);
+    jobLog.startedMidPrint = firstPoll;
     if (!firstPoll)
       notify("Print Started",
-             String(PRINTER_NAME) + " (" + PRINTER_SLUG + ")\nJob: " + jobFileName(fileName),
+             String(PRINTER_SHORT) + "\nJob: " + jobFileName(fileName),
              "default", "printer");
   }
 
@@ -378,6 +382,41 @@ void checkJobLog(const String& status) {
   double needed = 0;
   for (JsonVariantConst v : job["file"]["filament"].as<JsonArrayConst>()) needed += v.as<double>();
   if (needed > 0) jobLog.needed = needed;
+}
+
+// Alert once per job when the belt has carried the first printed end close to the front edge
+// (belt Z = move.axes Z machinePosition, ≈ 0 at the start thanks to G92 Z0)
+void checkPartEdge(const String& status) {
+  if (!jobLog.active || jobLog.edgeWarned || !isPrinting(status)) return;
+  JsonDocument filter;
+  filter["result"][0]["letter"] = true;
+  filter["result"][0]["machinePosition"] = true;
+  JsonDocument doc;
+  if (!duetModel("move.axes", "d99vno", doc, true, &filter)) return;
+  bool found = false;
+  double z = 0;
+  for (JsonVariantConst a : doc["result"].as<JsonArrayConst>()) {
+    const char* letter = a["letter"];
+    if (letter && !strcmp(letter, "Z") && a["machinePosition"].is<double>()) {
+      z = a["machinePosition"].as<double>();
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+  bool firstRead = !jobLog.edgeChecked;
+  jobLog.edgeChecked = true;
+  if (z < PRINTER_FRONT_MM - PART_EDGE_WARN_MM) return;
+  jobLog.edgeWarned = true;
+  // Already past the edge on the first read of a job running at boot: don't announce it again
+  if (firstRead && jobLog.startedMidPrint) return;
+  char pos[48];
+  snprintf(pos, sizeof(pos), "Belt Z: %.0f mm (edge at %.0f mm)", z, PRINTER_FRONT_MM);
+  jobWrite(String("EDGE    ") + fmtDt(time(nullptr)) + "  " + pos);
+  notify("Part Reaching Edge",
+         String(PRINTER_SHORT) +
+             "\nThe part is about to leave the printer: it will need a support behind soon",
+         "high", "straight_ruler");
 }
 
 // Alert once per spool when the time left drops below FILAMENT_LOW_HOURS
@@ -399,7 +438,7 @@ void checkFilamentTime() {
       char left[32];
       snprintf(left, sizeof(left), "%ldh %02ldmin", minutes / 60, minutes % 60);
       notifyOnce(problem, "Filament Low",
-                 String(PRINTER_NAME) + " " + cell + "\nTime left: " + left, "high", "warning");
+                 String(PRINTER_SHORT) + " " + cell + "\nTime left: " + left, "high", "warning");
     } else if (v.leftLive > FILAMENT_CLEAR_HOURS) {
       clearProblem(problem);
     }
@@ -420,6 +459,7 @@ void stateTask(void*) {
       checkLayer();
       String status = checkStateStatus();
       checkJobLog(status);
+      checkPartEdge(status);
       checkFilamentTime();
     }
     vTaskDelay(pdMS_TO_TICKS(REQUEST_STATE_MS));
