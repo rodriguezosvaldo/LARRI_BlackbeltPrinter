@@ -106,6 +106,7 @@ class Viewer {
     this.toolpath = null;
     this.stl = null;
     this.belt = this.plane = this.stage = null;
+    this.onChange?.();
   }
 
   // piece = /api/piece JSON: runs [[z, [x0, y0, x1, y1, ...]], ...] in G-code coordinates
@@ -239,6 +240,7 @@ class Viewer {
     const stl = this.source === "stl" && this.stl;
     if (this.toolpath) this.toolpath.printed.visible = this.toolpath.ghost.visible = !stl;
     if (this.stl) this.stl.printed.visible = this.stl.ghost.visible = !!stl || !this.toolpath;
+    this.onChange?.();
   }
 
   // z = current belt position in G-code coordinates (Duet machinePosition)
@@ -253,6 +255,20 @@ class Viewer {
       const count = lo < tp.runZ.length ? tp.runStart[lo] : tp.total;
       tp.printed.geometry.setDrawRange(0, count);
       tp.ghost.geometry.setDrawRange(count, tp.total - count);
+      // extent of the layer being printed (last G-code Z ≤ belt Z), part frame: the area on the
+      // gantry plane (used by the nozzle animation)
+      tp.layer = null;
+      if (lo > 0) {
+        let k = lo - 1;
+        while (k > 0 && tp.runZ[k - 1] === tp.runZ[lo - 1]) k--;
+        const p = tp.printed.geometry.attributes.position.array;
+        let h0 = Infinity, h1 = -Infinity, x0 = Infinity, x1 = -Infinity;
+        for (let i = tp.runStart[k] * 3; i < count * 3; i += 3) {
+          x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]);
+          h0 = Math.min(h0, p[i + 1]); h1 = Math.max(h1, p[i + 1]);
+        }
+        if (h1 >= h0) tp.layer = { h0, h1, x0, x1 };
+      }
     }
     const a = (this.angle * Math.PI) / 180, cot = Math.cos(a) / Math.sin(a);
     // printed: Z − d − h·cot(A) ≥ 0
@@ -280,6 +296,7 @@ class Viewer {
       st.pct.visible = z != null && percent != null && dm > d0;
       st.pct.element.textContent = percent != null ? `${percent.toFixed(1)}%` : "";
     }
+    this.onChange?.();
   }
 
   fit() {
@@ -302,25 +319,302 @@ function label(cls) {
   return new CSS2DObject(div);
 }
 
-// Dimension line along the belt at a fixed x, lying on the belt: main line + end ticks + label
-function dimension(x, color, cls) {
+// Dimension line along the belt (Z) at a fixed x and height y: main line + end ticks + label
+// (label `off` mm from the line in x)
+function dimension(x, color, cls, { y = 1, tick = 14, off = -28 } = {}) {
   const pos = new Float32Array(18);
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   const obj = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color }));
   const text = label(cls);
   obj.add(text);
-  const y = 1, tick = 14;
   return {
-    obj,
+    obj, text,
     set(d0, d1, txt) {
       pos.set([x, y, d0, x, y, d1, x - tick, y, d0, x + tick, y, d0, x - tick, y, d1, x + tick, y, d1]);
       g.attributes.position.needsUpdate = true;
       g.computeBoundingSphere();
-      text.position.set(x - 2 * tick, y, (d0 + d1) / 2);
+      text.position.set(x + off, y, (d0 + d1) / 2);
       text.element.textContent = txt;
     },
   };
+}
+
+// ============================ printer view (3D / top) ============================
+// Printer frame, mm: X across the belt (left → right seen from the front), Y up from the floor,
+// Z along the belt: 0 = nozzle line at the belt (green line), + toward the front. The belt carries
+// the piece toward the front, so a part-frame point (x, h, d) is at Z = belt Z − d: the last layer
+// is at the nozzle, the first one has travelled Z − d0. G-code +Z points to the back (the nozzle
+// moves back relative to the piece), so with Y up a right-handed G-code X points left seen from the
+// front: X = −x (+ centring). Sizes are rough, from the sketch.
+const PRINTER = {
+  width: 900, back: 270, front: 800, // back of the frame → nozzle line → front edge (0.8 m)
+  lowerH: 530, upperH: 570,          // spool cabinet / upper section
+  chamberW: 480, chamberH: 285, chamberY: 90, // build chamber, bottom chamberY above the cabinet
+  beltW: 340, beltBack: 60,          // belt starts beltBack behind the nozzle line
+  spoolR: 120, spoolCore: 45, spoolW: 110, spoolX: 225, spoolY: 240, spoolZ: -150,
+};
+const BELT_Y = PRINTER.lowerH + PRINTER.chamberY;
+const PRINTER_H = PRINTER.lowerH + PRINTER.upperH;
+const VIEW_MODES = ["top", "3d"];
+
+function outlineBox(w, h, d, x, y, z, color) {
+  const g = new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d));
+  const o = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color }));
+  o.position.set(x, y, z);
+  return o;
+}
+
+class PrinterView {
+  // src = the small Viewer (part frame): its toolpath / STL geometry is shared, printed part only
+  constructor(el, src) {
+    this.el = el;
+    this.src = src;
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.localClippingEnabled = true;
+    el.prepend(this.renderer.domElement);
+    this.labels = new CSS2DRenderer();
+    Object.assign(this.labels.domElement.style, { position: "absolute", inset: "0", pointerEvents: "none" });
+    this.renderer.domElement.after(this.labels.domElement);
+    const scene = (this.scene = new THREE.Scene());
+    scene.background = new THREE.Color(0x0a0c0f);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+    sun.position.set(1, 2, 1.5);
+    scene.add(sun);
+
+    const P = PRINTER, depth = P.back + P.front, zc = (P.front - P.back) / 2;
+    const frameCol = 0x8a94a0;
+    scene.add(outlineBox(P.width, P.lowerH, depth, 0, P.lowerH / 2, zc, frameCol));
+    scene.add(outlineBox(P.width, P.upperH, depth, 0, P.lowerH + P.upperH / 2, zc, frameCol));
+    const bl = P.beltBack + P.front;
+    // build chamber: only its opening on the front face of the printer body
+    const cw = P.chamberW / 2, c0 = BELT_Y, c1 = BELT_Y + P.chamberH;
+    this.chamber = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(
+      [[-cw, c0], [cw, c0], [cw, c1], [-cw, c1]].map(([x, y]) => new THREE.Vector3(x, y, P.front))),
+      new THREE.LineBasicMaterial({ color: frameCol }));
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(P.beltW, 6, bl),
+      new THREE.MeshStandardMaterial({ color: COLORS.belt, roughness: 1 }));
+    belt.position.set(0, BELT_Y - 3.2, (P.front - P.beltBack) / 2);
+    // green line: the nozzle, as wide as the gantry plane. At the belt with no piece; while printing
+    // it sweeps from the belt up the plane to the top of the layer being printed (animation only)
+    const nl = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.5, 0, 0), new THREE.Vector3(0.5, 0, 0)]);
+    this.nozzleLine = new THREE.Line(nl, new THREE.LineBasicMaterial({ color: 0x3ccf7a }));
+    this.sweep = null; // {h1: how high it goes on the plane} while there is a printed piece
+    this.cot = 1 / Math.tan((DEFAULT_GANTRY_ANGLE * Math.PI) / 180);
+    this.gantry = new THREE.Mesh(new THREE.PlaneGeometry(P.chamberW, 1), new THREE.MeshBasicMaterial({
+      color: 0x9ff2bd, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }));
+    scene.add(this.chamber, belt, this.nozzleLine, this.gantry);
+
+    // spools in the cabinet, axis front-back: rims + filament left (radius from the load cell %)
+    this.spools = [1, 2].map((i) => {
+      const x = (i === 1 ? -1 : 1) * P.spoolX;
+      const g = new THREE.Group();
+      g.position.set(x, P.spoolY, P.spoolZ);
+      const rim = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.CylinderGeometry(P.spoolR, P.spoolR, P.spoolW, 48), 30),
+        new THREE.LineBasicMaterial({ color: frameCol }));
+      const core = new THREE.Mesh(new THREE.CylinderGeometry(P.spoolCore, P.spoolCore, P.spoolW * 0.9, 32),
+        new THREE.MeshStandardMaterial({ color: 0x2a3038 }));
+      const fil = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, P.spoolW * 0.85, 48),
+        new THREE.MeshStandardMaterial({ color: COLORS.ghost, roughness: 0.7 }));
+      for (const o of [rim, core, fil]) { o.rotation.x = Math.PI / 2; g.add(o); }
+      const lbl = label("plbl spool");
+      lbl.position.set(0, 0, P.spoolW / 2 + 1);
+      g.add(lbl);
+      scene.add(g);
+      return { fil, lbl, i };
+    });
+
+    // part of the piece already out of the printer: front edge → first printed end (top left,
+    // outside the frame; only shown when something is out)
+    this.dimOut = dimension(-P.width / 2 - 60, COLORS.dimDone, "dim done", { y: PRINTER_H, tick: 30, off: -70 });
+    this.out = 0;
+    this.pct = label("pct");
+    scene.add(this.dimOut.obj, this.pct);
+
+    // printed piece: part frame → printer frame = 180° turn about the vertical (X and Z reversed,
+    // NOT a mirror: reversing only Z mirrored the piece left↔right), moved with the belt
+    this.piece = new THREE.Group();
+    this.piece.scale.set(-1, 1, -1);
+    scene.add(this.piece);
+    this.clip = new THREE.Plane();
+    this.tpRef = this.stlRef = this.tpObj = this.stlObj = null;
+
+    // cameras: top orthographic (pan + zoom), 3D perspective (orbit)
+    const top = new THREE.OrthographicCamera();
+    top.up.set(0, 0, -1); // back of the printer at the top of the screen
+    this.cams = { top, "3d": new THREE.PerspectiveCamera(40, 1, 10, 30000) };
+    this.rects = { // what the orthographic view frames: center + size on screen
+      top: { cx: -50, cy: zc + 20, w: P.width + 300, h: depth + 140 },
+    };
+    this.ctrls = {};
+    this.moved = {}; // mode → the user panned/zoomed since the last fit (then don't refit on its own)
+    for (const [m, cam] of Object.entries(this.cams)) {
+      const c = new OrbitControls(cam, this.renderer.domElement);
+      c.enableDamping = true;
+      c.enabled = false;
+      c.addEventListener("start", () => (this.moved[m] = true));
+      if (m !== "3d") {
+        c.enableRotate = false;
+        c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+        c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
+      }
+      this.ctrls[m] = c;
+    }
+    this.mode = "3d";
+    for (const m of VIEW_MODES) this.fit(m);
+
+    new ResizeObserver(() => this.resize()).observe(el);
+    this.resize();
+    const loop = (t = 0) => {
+      const cam = this.cams[this.mode];
+      this.ctrls[this.mode].update();
+      // nozzle line: smooth up/down along the gantry plane (period 4 s), belt → top of the layer
+      const s = this.sweep, nlo = this.nozzleLine;
+      const h = s ? s.h1 * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / 4000)) : 0;
+      nlo.position.set(0, BELT_Y + 0.5 + h, h * this.cot);
+      nlo.scale.x = P.chamberW;
+      this.renderer.render(scene, cam);
+      this.labels.render(scene, cam);
+      requestAnimationFrame(loop);
+    };
+    loop();
+  }
+
+  setMode(mode) {
+    if (!this.cams[mode]) mode = "3d";
+    this.ctrls[this.mode].enabled = false;
+    this.mode = mode;
+    this.ctrls[mode].enabled = true;
+    this.chamber.visible = mode === "3d";
+    this.gantry.visible = mode === "3d" && this.src.z != null;
+    this.showOut();
+    this.resize();
+  }
+
+  // dimension of the piece out of the printer (top / 3D, only when something is out)
+  showOut() {
+    const P = PRINTER, out = this.out;
+    this.dimOut.obj.visible = this.dimOut.text.visible = out > 0;
+    if (out > 0) this.dimOut.set(P.front, P.front + out, `${(out / 1000).toFixed(2)} m`);
+    // top view: frame the piece out of the printer too, unless the user moved the view
+    const zc = (P.front - P.back) / 2, ext = Math.max(out, 0);
+    const r = { cx: -50, cy: zc + 20 + ext / 2, w: P.width + 300, h: P.back + P.front + 140 + ext };
+    const old = this.rects.top;
+    if (Math.abs(r.h - old.h) > 20) {
+      this.rects.top = r;
+      if (!this.moved.top) this.fit("top");
+    }
+  }
+
+  frustum(mode) {
+    const cam = this.cams[mode], r = this.rects[mode], a = this.aspect || 1;
+    const halfH = Math.max(r.h, r.w / a) / 2;
+    Object.assign(cam, { left: -halfH * a, right: halfH * a, top: halfH, bottom: -halfH, near: 1, far: 20000 });
+    cam.updateProjectionMatrix();
+  }
+
+  fit(mode = this.mode) {
+    const cam = this.cams[mode], c = this.ctrls[mode];
+    this.moved[mode] = false;
+    if (mode === "3d") {
+      const t = new THREE.Vector3(0, PRINTER_H * 0.45, (PRINTER.front - PRINTER.back) / 2);
+      cam.position.set(t.x + 1300, t.y + 900, t.z + 1500);
+      c.target.copy(t);
+      cam.near = 10; cam.far = 30000;
+      cam.updateProjectionMatrix();
+      return;
+    }
+    const r = this.rects[mode];
+    const t = new THREE.Vector3(r.cx, 0, r.cy);
+    cam.position.copy(t).add(new THREE.Vector3(0, 5000, 0));
+    cam.zoom = 1;
+    c.target.copy(t);
+    cam.lookAt(t);
+    this.frustum(mode);
+  }
+
+  resize() {
+    const w = this.el.clientWidth, h = this.el.clientHeight;
+    this.renderer.setSize(w, h, false);
+    this.labels.setSize(w, h);
+    this.aspect = w / Math.max(h, 1);
+    const p = this.cams["3d"];
+    p.aspect = this.aspect;
+    p.updateProjectionMatrix();
+    this.frustum("top");
+  }
+
+  updateSpools(spools) {
+    const P = PRINTER;
+    for (const s of this.spools) {
+      const c = spools?.[`cell${s.i}`];
+      const pct = c?.percent;
+      s.fil.visible = pct != null;
+      const r = P.spoolCore + (P.spoolR - P.spoolCore) * Math.max(0, Math.min(1, (pct ?? 0) / 100));
+      s.fil.scale.set(r, 1, r);
+      // green = feeding the printer, red = not feeding
+      s.fil.material.color.setHex(c?.consuming ? 0x3ccf7a : 0xef5b5b);
+      s.lbl.element.textContent = pct != null ? `${num(pct, 0)}%` : "—";
+      s.lbl.element.classList.toggle("feeding", !!c?.consuming);
+      s.lbl.element.classList.toggle("idle", c != null && !c.consuming);
+    }
+  }
+
+  // Called by the small Viewer whenever its piece, source or belt Z changes
+  sync() {
+    const v = this.src;
+    if (v.toolpath !== this.tpRef) {
+      if (this.tpObj) { this.piece.remove(this.tpObj); this.tpObj.material.dispose(); }
+      this.tpRef = v.toolpath;
+      this.tpObj = v.toolpath && new THREE.LineSegments(v.toolpath.printed.geometry,
+        new THREE.LineBasicMaterial({ vertexColors: true }));
+      if (this.tpObj) this.piece.add(this.tpObj);
+    }
+    if (v.stl !== this.stlRef) {
+      if (this.stlObj) { this.piece.remove(this.stlObj); this.stlObj.material.dispose(); }
+      this.stlRef = v.stl;
+      this.stlObj = v.stl && new THREE.Mesh(v.stl.printed.geometry, new THREE.MeshStandardMaterial({
+        color: COLORS.printed, roughness: 0.6, metalness: 0.05, clippingPlanes: [this.clip], side: THREE.DoubleSide }));
+      if (this.stlObj) this.piece.add(this.stlObj);
+    }
+    const a = (v.angle * Math.PI) / 180, cot = Math.cos(a) / Math.sin(a), len = Math.hypot(cot, 1);
+    // printed = in front of the gantry plane: Z − (Y − belt)·cot(A) ≥ 0 (fixed in the printer frame)
+    this.clip.set(new THREE.Vector3(0, -cot / len, 1 / len), (cot * BELT_Y) / len);
+    const gh = PRINTER.chamberH;
+    this.gantry.scale.y = gh / Math.sin(a);
+    this.gantry.position.set(0, BELT_Y + gh / 2, (gh / 2) * cot);
+    this.gantry.rotation.set(Math.PI / 2 - a, 0, 0);
+    this.gantry.visible = this.mode === "3d" && v.z != null;
+
+    const z = v.z, on = z != null;
+    if (this.tpObj) this.tpObj.visible = on && v.toolpath.printed.visible;
+    if (this.stlObj) this.stlObj.visible = on && v.stl.printed.visible;
+    const useStl = this.stlObj?.visible;
+    const box = useStl ? v.stl.box : v.toolpath?.box;
+    // piece centred across the belt / chamber
+    const cx = box ? (box.min.x + box.max.x) / 2 : 0; // printer X = cx − x: centred, turned
+    this.piece.position.set(cx, BELT_Y, z ?? 0);
+    this.cot = cot;
+    // nozzle sweep height: top of the layer being printed (toolpath), else the whole STL height
+    const L = v.toolpath?.layer;
+    this.sweep = !on || !box ? null : { h1: L ? L.h1 : box.max.y };
+    // first printed end is at Z − d0: whatever is past the front edge is out of the printer
+    const out = on && box ? z - box.min.z - PRINTER.front : 0;
+    if (Math.abs(out - this.out) > 0.5 || (out > 0) !== (this.out > 0)) { this.out = out; this.showOut(); }
+    this.pct.visible = false;
+    if (on && box && v.percent != null) {
+      const d0 = box.min.z, d1 = box.max.z, h = box.max.y / 2;
+      const dm = Math.min(Math.max(z - h * cot, d0), d1);
+      if (dm > d0) {
+        this.pct.position.set(0, BELT_Y + h, z - (d0 + dm) / 2);
+        this.pct.element.textContent = `${v.percent.toFixed(1)}%`;
+        this.pct.visible = true;
+      }
+    }
+  }
 }
 
 // Non-indexed triangles: mirroring one axis inverts the winding, swap 2 vertices per triangle
@@ -340,13 +634,19 @@ class Card {
     document.getElementById("printers").append(this.el);
     this.f = {};
     this.el.querySelectorAll("[data-f]").forEach((e) => (this.f[e.dataset.f] = e));
-    this.viewer = new Viewer(this.el.querySelector(".view"));
+    this.partEl = this.el.querySelector(".partview");
+    this.mainEl = this.el.querySelector(".main3d");
+    this.viewer = new Viewer(this.partEl);
+    this.main = new PrinterView(this.mainEl, this.viewer);
+    this.viewer.onChange = () => this.main.sync();
     this.pieceId = null;
     this.modelUrl = null;
     this.modelGeom = null;
     this.btn = {};
     this.el.querySelectorAll("[data-act]").forEach((b) => (this.btn[b.dataset.act] = b));
-    this.btn.fit.onclick = () => this.viewer.fit();
+    this.btn.fit.onclick = () => (this.mode === "part" ? this.viewer.fit() : this.main.fit());
+    this.el.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => this.setMode(b.dataset.mode)));
+    this.setMode("3d"); // always open in 3D, same camera on both printers
     this.btn.source.onclick = () => {
       this.viewer.source = this.viewer.source === "stl" ? "toolpath" : "stl";
       prefs.set(`source:${key}`, this.viewer.source);
@@ -362,6 +662,16 @@ class Card {
   }
 
   set(name, text) { if (this.f[name]) this.f[name].textContent = text; }
+
+  // front / top / 3d = printer view, part = the whole piece (printed orange, rest grey)
+  setMode(mode) {
+    const part = mode === "part";
+    this.partEl.hidden = !part;
+    this.mainEl.hidden = part;
+    if (!part) this.main.setMode(mode);
+    this.mode = part ? "part" : this.main.mode;
+    this.el.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === this.mode));
+  }
 
   syncButtons() {
     const hasStl = !!this.viewer.stl, hasTp = !!this.viewer.toolpath;
@@ -461,6 +771,7 @@ class Card {
   render(p) {
     this.set("label", p.label);
     const job = p.job;
+    this.main.updateSpools(p.spools);
     const status = p.online ? p.status || "?" : "offline";
     this.f.status.textContent = status;
     this.f.status.className = `badge ${status}`;
