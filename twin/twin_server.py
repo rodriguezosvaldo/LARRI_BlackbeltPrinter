@@ -192,7 +192,10 @@ def poll_duet(key: str) -> None:
             state[key].update(upd)
             job = state[key].get("job") if state[key]["online"] else None
         if upd.get("online"):
-            update_piece(key, job)
+            try:
+                update_piece(key, job)
+            except Exception as e:  # never let one bad poll stop this printer's thread
+                print(f"[{key}] update_piece error: {e!r}")
         time.sleep(DUET_POLL_S)
 
 
@@ -221,9 +224,13 @@ def poll_esp(key: str) -> None:
 # ============================ Piece (G-code / STL) ============================
 def find_model(job: dict) -> tuple[str | None, dict]:
     """STL in twin/models/ named like a build object (Cura mesh name) or like the G-code file."""
-    if not MODEL_DIR.is_dir():
+    try:
+        if not MODEL_DIR.is_dir():
+            return None, {}
+        stls = {p.stem.lower(): p for p in MODEL_DIR.iterdir() if p.suffix.lower() == ".stl"}
+    except OSError as e:  # e.g. WinError 1450: must not kill the poll thread
+        print(f"[model] cannot read {MODEL_DIR}: {e}")
         return None, {}
-    stls = {p.stem.lower(): p for p in MODEL_DIR.iterdir() if p.suffix.lower() == ".stl"}
     names = [Path(o).stem for o in job.get("objects") or []] + [Path(job["file"]).stem]
     for n in names:
         p = stls.get(n.lower())
