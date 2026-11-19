@@ -6,91 +6,152 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monitoring and configuration for two BlackBelt 3D printers (Duet 3 MB 6HC mainboard + 3HC
 expansion board, RepRapFirmware) at `192.168.1.243` (printer 1) and `192.168.1.188`
-(printer 2). It has four mostly independent parts:
+(printer 2). On branch `all_in_esp32` all monitoring runs on the ESP32s (one per printer);
+the PC only stores logs. Parts:
 
-1. **`alarm.py`** — the live Python service: polls both printers' HTTP object-model APIs,
-   sends push notifications via [ntfy](https://ntfy.sh), and writes per-print job logs.
-2. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
-   heater-control web UI for the print environment. Unrelated to `alarm.py` at the code level.
-3. **`load cel/`** — ESP32 + two HX711 load cells (PlatformIO project) that weigh the filament
-   spools and send their own ntfy "low filament" alerts, plus a serial calibration script.
-4. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
+1. **`load cel/hx711/`** — PlatformIO firmware, one build per printer (`pio run -e p1` / `-e p2`):
+   printer monitor (port of `alarm.py`: Duet polling, ntfy alerts, job logs), load cells (two
+   HX711), spool monitor (port of `spool_monitor.py`: live rate, time left, low-filament alert)
+   and the web dashboard.
+2. **`log_server.py`** — PC log receiver (stdlib only, port 5052): the ESP32s POST job-log lines,
+   printer replies and load-cell rows; written to `logs/` in the old formats.
+3. **`twin/`** — read-only digital twin web app on the PC (stdlib only, port 5053), see below.
+4. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
+   heater-control web UI for the print environment. Unrelated to the rest at the code level.
+4b. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
+   (planned use: move the Hall magnet to drive retraction/feed). Own PlatformIO project
+   (`pio run -t upload -t monitor` from that folder, ESP32-S3 like P1, own gitignored
+   `include/secrets.h` with WiFi only). `src/esp32_temp.cpp`: Waveshare Bus Servo Adapter (A)
+   (jumper A, servo RX/TX on GPIO 12/13, optional Hall on ADC1 `HALL_PIN`), own STS protocol
+   implementation (no library), serial console (`help`); over WiFi (`bb-servo.local`)
+   `/api/state` (cached, polled every 100 ms), `/api/info` (EEPROM), `/api/cmd?c=<console cmd>`
+   (returns the command's output). `servo_web.py` (stdlib, port 5054) serves `web/index.html`
+   on localhost and proxies `/api/*` to the ESP32.
+5. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
    each printer's SD card, kept here for reference/version control. `GCODE_CHEATSHEET.md`
    documents the G/M-codes used in them.
+6. **Reference only, not run:** `alarm.py`, `load cel/spool_monitor.py` (+ `.html`,
+   `spools.json`), `run_alarm.bat` — the previous PC version; `legacy_alarm.py` — an older,
+   larger `alarm.py` (stall detection, MCU temp, VIN, heater/filament-sensor faults). When
+   porting a check from them, follow the firmware's conventions (`prev*` edge detection,
+   `notifyOnce`).
 
 See `README.md` for the user-facing overview and setup steps.
 
-## Running
+## Building / running
 
 ```bash
-pip install -r requirements.txt
-python alarm.py                 # or run_alarm.bat on Windows (expects .venv/ in repo root)
+cd "load cel/hx711"
+pio run -e p1 -t upload -t monitor   # P1: ESP32-S3; -e p2 = P2: classic ESP32
+python log_server.py                 # on the PC (or run_log_server.bat)
 ```
 
-Requires a `.env` in the repo root (see comment block at the top of `alarm.py`):
+`pio` may not be on PATH: it is at `~/.platformio/penv/Scripts/pio.exe`. Both envs must compile
+(P2's flash is ~80% used). There is no test suite or linter.
 
-```
-PRINTER1_IP=http://192.168.1.243
-PRINTER2_IP=http://192.168.1.188
-NTFY1=https://ntfy.sh/<topic1>
-NTFY2=https://ntfy.sh/<topic2>
-```
+**`load cel/hx711/include/secrets.h`** (gitignored; template `secrets.example.h`) defines
+`WIFI_SSID`, `WIFI_PASS`, `NTFY1`, `NTFY2`, optional `LOG_SERVER_URL` (`http://<pc-ip>:5052`,
+empty/undefined = no PC logs), optional `PEER_URL` and optional `OTA_PASS` (firmware update
+over WiFi: `pio run -e p1_ota|p2_ota -t upload` runs `ota_upload.py`, which POSTs the .bin to
+`/update` with Basic auth `ota:OTA_PASS`; refused while `printerBusy()` unless `force=1`). Never commit or echo its contents.
+`calibration.py` uses `pyserial` (in `requirements.txt`).
 
-`alarm.py` has no web UI (the old 5050 dashboard was removed 2026-10-27). Last printer replies are written under `logs/` (gitignored). There is
-no test suite, linter, or build step for the Python side. `requirements.txt` also includes
-`pyserial`, which is only used by `load cel/calibration.py` (serial mode).
+## Firmware architecture (`load cel/hx711/src/`)
 
-## `alarm.py` architecture
+`config.h` holds everything per printer, chosen by `-D PRINTER_NUM` (pins, `PRINTER_URL`,
+`NTFY_URL`, `PRINTER_KEY` p1/p2, `PEER_URL`, cell defaults from the old `spools.json`) and the
+constants ported from the Python (`RATE_WINDOW`, `JUMP_THRESHOLD`, `TENSION_OFFSET`,
+`FILAMENT_LOW_HOURS`, ...). Keep both printers' blocks in sync when adding a setting.
 
-Two threads run forever in `main()`:
+Tasks: `loop()` (core 1) runs the web server, button and HX711 reads; on core 0, `reply`
+(every `REQUEST_REPLY_MS` = 0.5 s), `state` (every 10 s) and `net` (sends ntfy + PC logs) tasks.
+HTTP calls that may be slow (ntfy over TLS, the PC) only happen in `net`, through queues, so a
+slow/offline PC or ntfy never delays polling or the web page.
 
-- **`loop_check_seqs_reply`** (every `REQUEST_REPLY` = 0.5s): polls `seqs.reply` on the Duet
-  object model to detect *new* M118/error/warning messages (`check_reply`). Polled fast
-  because the firmware only exposes the latest reply for ~1s.
-- **`loop_check_state`** (every `REQUEST_TEN_SECONDS` = 10s): checks current layer
-  (`check_layer`), print state (`check_state_status`) and the job log (`check_job_log`), for
-  both printers in sequence, plus `check_filament_time`: it reads `SPOOL_API` (default
-  `http://localhost:5051/api/spools`, served by `load cel/spool_monitor.py`) once per loop and
-  sends one ntfy alert per cell (`notify_once`, key `filament_low:<cell>`) when time left <
-  `FILAMENT_LOW_HOURS` (2 h); re-armed above `FILAMENT_CLEAR_HOURS` (new spool). Only cells with
-  `consuming` true are checked, using `hours_left_live` (no `hours_left_ref` fallback: it can't
-  tell which cell feeds the printer); cells reading at/below `empty` (+ `tension_offset`) are
-  skipped as empty reel / no reel. If the spool monitor is down it just logs.
+- **`printer.cpp`** (port of `alarm.py`, for this ESP32's printer only): `checkReply`
+  (`seqs.reply` change → `/rr_reply` → logged on the PC only, no ntfy: pause/resume come from
+  `checkStateStatus`, print start/end from `checkJobLog`), and every 10 s `checkLayer`
+  → `checkStateStatus` → `checkJobLog` → `checkFilamentTime`. All Duet reads go through
+  `duetModel()` = `GET {PRINTER_URL}/rr_model?key=...` (ArduinoJson, with a filter for `job`).
+  See the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
+  and `isPrinting`/`isStopped` for the state vocabulary.
+  - **Edge detection**: each check compares the polled value with its `prev*` variable and only
+    notifies on a *transition*. Update `prev*` even when not notifying.
+  - **`notifyOnce(problem, ...)` / `clearProblem()`**: for conditions that recur every poll.
+    Bounded list (`MAX_NOTIFIED`), oldest key evicted first.
+  - **Job logs**: a job = `job.file.fileName` non-null; start = now − `job.duration`; ends when
+    `fileName` goes null or changes. Lines (START, PAUSE, RESUME, FILAMENT CONSUMED, END) go to
+    `pclogJobLine(key, base, line)`; the PC picks the file name (`<base>.log`, `_2`, `_3`...)
+    and maps `key` (base + start unix) to it. Extruded length = sum of positive
+    `job.rawExtrusion` deltas. A new job also sends the "Print Started" ntfy, skipped on the
+    first job read after boot (`jobPolled`) so a print already running isn't announced.
+  - `checkFilamentTime` reads the spool module directly: only cells with `consuming`, using
+    `hours_left_live`, skipping cells at/below `empty` (+ tension offset); key
+    `filament_low:cellN`, re-armed above `FILAMENT_CLEAR_HOURS`.
+  - Shared state for the dashboard is in `shared` under `stateLock` (`printerStatusJson`).
+- **`spool.cpp`** (port of `spool_monitor.py` `CellHistory` + `cell_view`): per-cell ring buffer
+  of (unix, counts) over `RATE_WINDOW`, jump detection (median of last 15), least-squares live
+  rate, current = fitted value or last-minute mean (`FIT_MAX_DEVIATION`), `TENSION_OFFSET` added
+  while consuming. Per-cell config (`full`/`empty`/`ref_rate`/`note`) + peer URL are stored in
+  NVS (`Preferences`, edited at `/config`), defaults in `config.h`. Samples are only added once
+  `spoolReady()` (clock set by NTP and the PC history reload attempted).
+- **`cells.cpp`**: HX711 reads every 2 s (non-blocking `millis()` timer), serial
+  `HX711 #<n> reading: <raw>` (parsed by `calibration.py` — update its regex if this changes),
+  on-board calibration (button GPIO 4 or `/calib`, Welford mean/std over `CALIB_WINDOW` = 100,
+  `[calib] ...` serial lines). When done, `spoolCalibrate()` replaces the cell's `empty` or
+  `full` (closest within `CALIB_MATCH_TOLERANCE`, skipped if std > `CALIB_MAX_STD` or the cell
+  is consuming) and saves the config to NVS like `/config`. Feeds `spoolAdd` and `pclogCells`.
+- **`ntfy.cpp`**: `notify()` queues (adds the timestamp like `alarm.py`), `ntfyProcess()` sends
+  over HTTPS (`setInsecure()`); failures are logged, never retried or raised.
+- **`pclog.cpp`**: queues for the PC (`/job`, `/reply` events in order; `/cells` rows once a
+  minute, max `PCLOG_MAX_ROWS` kept while the PC is down). `pclogLoadHistory()` at boot streams
+  `GET /cells/recent` into the spool history.
+- **`web.cpp` + `pages.h`**: `/` dashboard (fetches its own `/api/spools` and the peer's, CORS
+  open), `/config`, `/calib`, `/api/spools` (same shape as the old `spool_monitor.py` API with
+  only this printer, plus `printer`, `self`, `peer`), `/api/config` GET/POST, `/data`,
+  `/calibration`, `/calibration/start|cancel`, `/update` (page + POST firmware, `Update` lib,
+  restart 1.5 s after success). `/api/spools` also has `fw` (= build date/time `FW_BUILD`).
 
-Key patterns to preserve when editing:
+Pins: P1 (S3) cell 1 DOUT 17 / SCK 18, cell 2 DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3
+(native USB); P2 (classic) 21/22, 18/19. The ESP32s get their IP by DHCP; `PEER_URL` (or
+`/config`) and `calibration.py` (`P1_IP` = `192.168.1.132`, `P2_IP` = `192.168.1.226`) must
+match. mDNS names: `bb-p1.local`, `bb-p2.local`. Cells are named `p1_cell1`/`p1_cell2`,
+`p2_cell1`/`p2_cell2`. `hx711/.pio/` is build output — don't edit.
 
-- **Edge-detection via `prev_by_printer`**: each check function compares the freshly polled
-  value against a per-printer `_prev()` dict and only notifies on a *transition* (e.g.
-  `processing -> paused`), not on every poll. Update `prev[...]` even when not notifying, or
-  edge detection breaks.
-- **`notify_once()` de-dupe**: for problems that recur every poll (e.g. a new M118
-  message), don't call `notify()` directly — route through `notify_once(printer_ip,
-  problem_key, ...)`. It sends a single alert, then stays silent for that key until
-  `clear_problem_notification()` is called (when the condition clears).
-- **Duet object model access**: all printer reads go through `GET {printer_ip}/rr_model?key=...`
-  (see `get_job`, `get_state_status`, `get_layer`, `get_seqs_reply`). See
-  `GCODE_CHEATSHEET.md` and the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
-  for available keys, and `PRINTING_STATES`/`STOPPED_STATES` in `alarm.py` for the state
-  vocabulary.
-- **Print job logs** (`check_job_log`, called after `check_state_status` in the 10s loop): one
-  file per print in `logs/` (`p1_243_<start date>_<job>.log`, `_2`, `_3`... for repeats that day), with START,
-  every PAUSE/RESUME (with pause length) and END (finished/cancelled/aborted, total and paused
-  time). A job is detected by `job.file.fileName` being non-null; start time is
-  `now - job.duration`, and the job ends when `fileName` goes null or changes.
-  A new job also sends the "Print Started" ntfy (skipped on the first `get_job` after startup,
-  `job_polled`, so a print already running isn't announced) and clears the `m118:*`
-  `notify_once` keys, so repeated M118 messages alert once per print. `check_reply` skips the
-  firmware's "selected for printing" reply to avoid a duplicate alert.
-  `_job_log_sample` (every 10s poll) accumulates the extruded length, summing only positive `job.rawExtrusion` deltas (a drop = firmware reset). The END entry
-  adds a `FILAMENT CONSUMED` line (total m, avg m/h and cm³/h over non-paused time, using
-  `FILAMENT_DIAMETER`).
-- Notification failures (`notify()`, `get_*` HTTP calls) are caught and logged to stdout, never
-  raised — a printer being briefly unreachable must not kill the polling loops.
+## `log_server.py`
 
-`legacy_alarm.py` is a superset of `alarm.py`'s checks (stall detection, MCU temp, VIN,
-heater/filament-sensor faults) kept for reference — it is not run. When porting a check back
-in, follow `alarm.py`'s current conventions (`_prev`, `notify_once`), not the
-legacy file's.
+`ThreadingHTTPServer` on `LOG_SERVER_PORT` (5052). Writes `logs/<base>.log` (index in
+`logs/.job_index.json`), `logs/replies_<slug>.jsonl`, `logs/load_cells/<printer>_<date>.csv`
+(header `time,unix,cell1,cell2`, rows not newer than the last written are skipped) and
+`logs/print_time_history.csv` (one row per completed print from `POST /history`, sent by
+`jobLogEnd` only if `finished` and `rawExtrusion` ≥ 95% of `job.file.filament`, so prints
+resumed mid-file are left out; `part_name()` = capitalized words after the `35_09_3DXTECH_V_`
+prefix, before ` - `/a number/a lowercase word, joined by `_`; duplicates skipped by `key`). Names are validated with `SAFE_NAME`. `logs/` is gitignored.
+
+## `twin/` (digital twin)
+
+`twin_server.py` (`ThreadingHTTPServer`, `TWIN_PORT` 5053): one thread per Duet polls
+`rr_model` (`state.status`, `job`, `move.axes`) every 2 s, one per
+ESP32 polls `/api/spools` every 5 s; `GET /api/state` returns both. When `job.file.fileName`
+changes, the G-code is streamed from `rr_download` through `gcode.Parser` (outer walls only,
+points < 1.5 mm apart dropped) and cached gzipped in `twin/cache/<hash>.json.gz`
+(`/api/piece/<p1|p2>`). STLs in `twin/models/` are matched by `job.build.objects` name or G-code
+name. `web/app.js` (Three.js 0.160 from jsDelivr, no build) draws in the part frame:
+h = y·sin(A), d = z − y·cos(A), A = `;Gantry Angle` from the G-code header (35 on these
+printers; verified with a real file). Printed = layers with G-code Z ≤ belt Z (Duet
+`machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
+`timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
+`logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
+shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
+
+## `load cel/calibration.py`
+
+`python calibration.py [p1[=SOURCE]] [p2[=SOURCE]]`, SOURCE = COM port or ESP32 IP/URL (default:
+both printers over WiFi). One reader thread per printer (serial, or WiFi polling `/data`,
+skipping repeated `seq`) feeds a shared queue; prints mean / std-dev per printer/cell every 100
+readings (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`).
+`python calibration.py report [DIR]` (also run on Ctrl+C) rebuilds `calibration_results.txt`
+from the logs; text below its "Manual notes" marker is kept.
 
 ## `dht22.cpp` (ESP32 sketch)
 
@@ -103,59 +164,10 @@ signal on `HEATER_PIN`. WiFi credentials come from `dht22_secrets.h` (gitignored
 `dht22_secrets.example.h`, which must sit next to the sketch). Never hardcode credentials in
 tracked files.
 
-## `load cel/` (load-cell filament monitor)
-
-Note the directory name has a space (`load cel`) — quote it in shell commands.
-
-- Each printer has its own ESP32 + two HX711 + two load cells. P1 (.243) uses an ESP32-S3
-  (`env:esp32-s3`, pins below); P2 (.188) stays on a classic ESP32 (`esp32dev` env and pins
-  21/22, 18/19, kept commented out — switch to them to flash P2). Each ESP32 has a fixed IP
-  (`STATIC_IP` in `main.cpp`: P1 `192.168.1.132`, P2 `192.168.1.226`, must match `spools.json`);
-  switch that line too when flashing the other printer.
-- **`hx711/`** — PlatformIO project (currently set up for P1: Arduino framework, `bogde/HX711` lib,
-  115200 baud). `src/main.cpp` reads two HX711 amplifiers (cell 1: DOUT 17 / SCK 18; cell 2:
-  DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3, they are native USB) every 2s (non-blocking `millis()` timer, not `delay()`, so the web server
-  stays responsive), prints `HX711 #<n> reading: <raw>` over serial, serves the latest readings
-  as JSON at `GET http://<esp32-ip>/data` (`seq`, `ok`, `cell1`, `cell2`, `threshold1`/`threshold2` (2 h levels), `threshold1_1h`/`threshold2_1h`; the IP
-  is printed over serial once WiFi connects), and POSTs an ntfy alert when a raw reading stays below a threshold for 3 consecutive polls
-  (`checkLow()` on a `LowAlert` struct). Each cell has two levels, `CELLn_LOW_THRESHOLD_2HOURSLEFT`
-  (~50 m) and `CELLn_LOW_THRESHOLD_1HOURLEFT` (~25 m), derived from counts/m and the empty-reel reading
-  (per-cell table in `README.md`). Cells are named `p1_cell1`/`p1_cell2` (printer 1, .243) and
-  `p2_cell1`/`p2_cell2` (printer 2, .188); each printer has its own ESP32; see the comments in
-  `main.cpp`. Each level's `notified` flag prevents repeat
-  alerts until the reading goes back above its threshold. Thresholds are raw HX711 counts (no tare/scale factor applied) and must be tuned
-  per cell.
-- **`hx711/include/secrets.h`** (gitignored) — must define `WIFI_SSID`, `WIFI_PASS`,
-  `P1_NTFY_URL`, `P2_NTFY_URL`. Currently `main.cpp` sends both cells' alerts to
-  `P1_NTFY_URL`. Never commit or echo this file's contents.
-- **`calibration.py`** — `python calibration.py [p1[=SOURCE]] [p2[=SOURCE]]`, SOURCE = COM port
-  or ESP32 IP/URL (default: both printers over WiFi, `P1_IP` = `192.168.1.132`, `P2_IP` =
-  `192.168.1.226`). One reader thread per printer (serial, or WiFi polling `/data`, skipping repeated `seq`)
-  feeds a shared queue. Parses the serial output format above and prints mean / std-dev per printer/cell every 100 readings
-  (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`), for picking
-  thresholds. If you change the serial print format in `main.cpp`, update the regex here too.
-  `python calibration.py report [DIR]` (also run on Ctrl+C) rebuilds `calibration_results.txt` from the
-  logs: rest levels (low std, flat), auto-tagged empty reel / no reel / full spool from the jumps
-  between them, and the printing rate (least-squares over runs >= 1 h). Text below its
-  "Manual notes" marker is kept.
-- **`spool_monitor.py`** + `spool_monitor.html` — Flask page on port 5051 (separate from
-  `alarm.py`). One thread per printer polls the ESP32 `/data` (IPs and per-cell `full`/`empty`/
-  `ref_rate` in `spools.json`, reloaded on mtime change). `CellHistory` keeps the last
-  `RATE_WINDOW` (2 h) of readings; live rate = least-squares slope (counts/h, positive =
-  consuming), shown after `MIN_RATE_SPAN`; a jump > `JUMP_THRESHOLD` for `JUMP_CONFIRM`
-  readings = spool change, history reset. Time left = (current − empty) / rate, where
-  current = the fitted line's value now while consuming, or the last-minute mean when idle or
-  when the two differ by more than `FIT_MAX_DEVIATION`;
-  while consuming, `TENSION_OFFSET` (15k counts) is added to the reading first, since
-  filament tension lowers it during printing and `full`/`empty` are measured at rest.
-  Readings go to `logs/load_cells/<printer>_<date>.csv` and are reloaded at startup.
-- `hx711/.pio/` is PlatformIO build output/library cache — don't edit.
-
 ## `config.g/` and `macros/`
 
 Per-printer RepRapFirmware startup config (`config.g/<ip>_config.g`) and macros
 (`macros/macros_<ip>/` for jogging/homing, `macros/load/<printer-num>/` for filament
 load/unload and pause/resume G-code run on the Duet board itself). These are firmware-side
-files edited for the physical printers and uploaded via the Duet Web Control UI, not code
-invoked by `alarm.py`. Printer "188"/"243" numbering in macro folder names refers to the last
-IP octet.
+files edited for the physical printers and uploaded via the Duet Web Control UI. Printer
+"188"/"243" numbering in macro folder names refers to the last IP octet.
