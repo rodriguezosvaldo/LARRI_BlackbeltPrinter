@@ -34,8 +34,6 @@ String prevStatus;  // "" = None
 bool jobPolled = false;  // false until the first job read: no "Print Started" for a job
                          // already running at boot
 
-// Duet reply when a job starts ("File x.gcode selected for printing")
-const char* const MESSAGE_START_PRINTING = "selected for printing";
 bool prevHasLayer = false;
 long prevLayer = 0;
 
@@ -55,27 +53,11 @@ bool notifyOnce(const String& problem, const String& title, const String& messag
     }
   }
   notified.push_back(problem);
-  // m118:<text> keys are never cleared (as in alarm.py); keep the list bounded by
-  // forgetting the oldest message keys first
-  if (notified.size() > MAX_NOTIFIED) {
-    for (auto it = notified.begin(); it != notified.end(); ++it) {
-      if (it->startsWith("m118:")) {
-        notified.erase(it);
-        break;
-      }
-    }
-  }
+  // Keep the list bounded (keys are cleared by clearProblem, this is only a safety net)
+  if (notified.size() > MAX_NOTIFIED) notified.erase(notified.begin());
   xSemaphoreGive(notifiedLock);
   notify(title, message, priority, tags);
   return true;
-}
-
-// New print: re-arm M118 alerts so repeated messages notify once per print
-void clearM118() {
-  xSemaphoreTake(notifiedLock, portMAX_DELAY);
-  for (auto it = notified.begin(); it != notified.end();)
-    it = it->startsWith("m118:") ? notified.erase(it) : it + 1;
-  xSemaphoreGive(notifiedLock);
 }
 
 void clearProblem(const String& problem) {
@@ -151,15 +133,12 @@ void checkReply() {
   long seqs = doc["result"].as<long>();
   if (hasPrevSeqs && seqs != prevSeqs) {
     String reply;
+    // Replies are only logged on the PC, never sent to ntfy: the events they report (pause,
+    // resume...) are already notified by checkStateStatus, and print start/end by checkJobLog
+    // ("Print Started", "Print Finished/Cancelled/Aborted"), so a reply would be a duplicate.
     if (httpGet("/rr_reply", reply, false)) {
       reply.trim();
-      if (reply.indexOf(MESSAGE_START_PRINTING) >= 0) {
-        saveLastReply(reply);  // "Print Started" is sent by checkJobLog
-      } else if (reply.length()) {
-        notifyOnce("m118:" + reply, "New M118 Message",
-                   String(PRINTER_SLUG) + "\nMessage: " + reply, "default", "warning");
-        saveLastReply(reply);
-      }
+      if (reply.length()) saveLastReply(reply);
     }
   }
   // Always remember the last value (alarm.py only did it after a change, so the first
@@ -383,7 +362,6 @@ void checkJobLog(const String& status) {
   if (!fn) return;
   if (!jobLog.active) {
     jobLogStart(fileName, job["duration"].as<double>(), now);
-    clearM118();
     if (!firstPoll)
       notify("Print Started",
              String(PRINTER_NAME) + " (" + PRINTER_SLUG + ")\nJob: " + jobFileName(fileName),

@@ -18,6 +18,15 @@ the PC only stores logs. Parts:
 3. **`twin/`** — read-only digital twin web app on the PC (stdlib only, port 5053), see below.
 4. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
    heater-control web UI for the print environment. Unrelated to the rest at the code level.
+4b. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
+   (planned use: move the Hall magnet to drive retraction/feed). Own PlatformIO project
+   (`pio run -t upload -t monitor` from that folder, ESP32-S3 like P1, own gitignored
+   `include/secrets.h` with WiFi only). `src/esp32_temp.cpp`: Waveshare Bus Servo Adapter (A)
+   (jumper A, servo RX/TX on GPIO 12/13, optional Hall on ADC1 `HALL_PIN`), own STS protocol
+   implementation (no library), serial console (`help`); over WiFi (`bb-servo.local`)
+   `/api/state` (cached, polled every 100 ms), `/api/info` (EEPROM), `/api/cmd?c=<console cmd>`
+   (returns the command's output). `servo_web.py` (stdlib, port 5054) serves `web/index.html`
+   on localhost and proxies `/api/*` to the ESP32.
 5. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
    each printer's SD card, kept here for reference/version control. `GCODE_CHEATSHEET.md`
    documents the G/M-codes used in them.
@@ -60,7 +69,8 @@ HTTP calls that may be slow (ntfy over TLS, the PC) only happen in `net`, throug
 slow/offline PC or ntfy never delays polling or the web page.
 
 - **`printer.cpp`** (port of `alarm.py`, for this ESP32's printer only): `checkReply`
-  (`seqs.reply` change → `/rr_reply` → `notifyOnce("m118:<text>")`), and every 10 s `checkLayer`
+  (`seqs.reply` change → `/rr_reply` → logged on the PC only, no ntfy: pause/resume come from
+  `checkStateStatus`, print start/end from `checkJobLog`), and every 10 s `checkLayer`
   → `checkStateStatus` → `checkJobLog` → `checkFilamentTime`. All Duet reads go through
   `duetModel()` = `GET {PRINTER_URL}/rr_model?key=...` (ArduinoJson, with a filter for `job`).
   See the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
@@ -68,7 +78,7 @@ slow/offline PC or ntfy never delays polling or the web page.
   - **Edge detection**: each check compares the polled value with its `prev*` variable and only
     notifies on a *transition*. Update `prev*` even when not notifying.
   - **`notifyOnce(problem, ...)` / `clearProblem()`**: for conditions that recur every poll.
-    Bounded list (`MAX_NOTIFIED`), `m118:` keys evicted first.
+    Bounded list (`MAX_NOTIFIED`), oldest key evicted first.
   - **Job logs**: a job = `job.file.fileName` non-null; start = now − `job.duration`; ends when
     `fileName` goes null or changes. Lines (START, PAUSE, RESUME, FILAMENT CONSUMED, END) go to
     `pclogJobLine(key, base, line)`; the PC picks the file name (`<base>.log`, `_2`, `_3`...)
