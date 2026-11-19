@@ -403,7 +403,6 @@ progress{width:100%;margin-top:12px}
 <p>Running build: <b id="fw">-</b></p>
 <label>Firmware (<code>.pio/build/<span id="env">pX</span>/firmware.bin</code>)<input type="file" id="file" accept=".bin"></label>
 <label>Password (OTA_PASS)<input type="password" id="pass"></label>
-<label><input type="checkbox" id="force"> Update even if the printer has a job (the job log restarts)</label>
 <button id="go" onclick="upload()">Upload</button>
 <progress id="bar" max="100" value="0" hidden></progress>
 <p id="msg"></p>
@@ -418,7 +417,7 @@ function upload(){
   const f=$('file').files[0];if(!f){$('msg').textContent='Choose a .bin file';return;}
   const fd=new FormData();fd.append('firmware',f,f.name);
   const x=new XMLHttpRequest();
-  x.open('POST','/update'+($('force').checked?'?force=1':''));
+  x.open('POST','/update');
   x.setRequestHeader('Authorization','Basic '+btoa('ota:'+$('pass').value));
   x.upload.onprogress=e=>{if(e.lengthComputable)$('bar').value=e.loaded/e.total*100;};
   x.onload=()=>{let j={};try{j=JSON.parse(x.responseText);}catch(e){}

@@ -53,7 +53,7 @@ python log_server.py                 # on the PC (or run_log_server.bat)
 `WIFI_SSID`, `WIFI_PASS`, `NTFY1`, `NTFY2`, optional `LOG_SERVER_URL` (`http://<pc-ip>:5052`,
 empty/undefined = no PC logs), optional `PEER_URL` and optional `OTA_PASS` (firmware update
 over WiFi: `pio run -e p1_ota|p2_ota -t upload` runs `ota_upload.py`, which POSTs the .bin to
-`/update` with Basic auth `ota:OTA_PASS`; refused while `printerBusy()` unless `force=1`). Never commit or echo its contents.
+`/update` with Basic auth `ota:OTA_PASS`; allowed while printing). Never commit or echo its contents.
 `calibration.py` uses `pyserial` (in `requirements.txt`).
 
 ## Firmware architecture (`load cel/hx711/src/`)

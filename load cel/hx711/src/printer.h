@@ -7,8 +7,5 @@
 
 void printerBegin();  // starts the polling tasks
 
-// True while the Duet has a job loaded (printing, paused...): firmware updates wait for it
-bool printerBusy();
-
 // Latest printer state for the dashboard: {url, online, status, layer, file, last_seen}
 void printerStatusJson(JsonObject out);

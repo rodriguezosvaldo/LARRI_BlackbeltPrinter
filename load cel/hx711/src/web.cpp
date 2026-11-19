@@ -98,9 +98,10 @@ void handleConfigPost() {
 }
 
 // ======================= Firmware update over WiFi =======================
-// POST /update[?force=1], multipart file, Basic auth ota:OTA_PASS. Written to the other OTA
+// POST /update, multipart file, Basic auth ota:OTA_PASS. Written to the other OTA
 // partition while the current firmware keeps running; the bootloader only switches to it if
-// Update.end() verified it (size, checksum, chip), so a bad upload changes nothing.
+// Update.end() verified it (size, checksum, chip), so a bad upload changes nothing. Allowed
+// while printing: the reboot only pauses monitoring for a few seconds.
 struct {
   int code = 0;  // 0 = OK so far
   String error;
@@ -123,8 +124,6 @@ void handleUpdateUpload() {
     if (!strlen(OTA_PASS)) otaFail(403, "OTA disabled: OTA_PASS not set in secrets.h");
     else if (!server.authenticate("ota", OTA_PASS)) otaFail(401, "wrong password");
     else if (rebootAt) otaFail(409, "already updated, rebooting");
-    else if (printerBusy() && server.arg("force") != "1")
-      otaFail(409, "printer has a job (printing/paused): wait, or force=1");
     else if (!Update.begin(UPDATE_SIZE_UNKNOWN)) otaFail(500, Update.errorString());
     else Serial.printf("[ota] receiving %s\n", up.filename.c_str());
   } else if (up.status == UPLOAD_FILE_WRITE) {

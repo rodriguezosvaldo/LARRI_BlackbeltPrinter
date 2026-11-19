@@ -85,9 +85,9 @@ pio run -e p2_ota -t upload    # P2 at 192.168.1.226
 ```
 
 or from the browser at `http://<esp32-ip>/update` (the "firmware" link on the dashboard) with
-`.pio/build/<env>/firmware.bin`. The ESP32 refuses while its printer has a job (printing or
-paused), because the reboot restarts the job log; `OTA_FORCE=1` (or the checkbox on the page)
-overrides it. A broken or wrong-board file is rejected and the old firmware keeps running.
+`.pio/build/<env>/firmware.bin`. It works while printing: monitoring stops only for the reboot,
+and a running job is picked up again after it (no new "Print Started" alert). A broken or
+wrong-board file is rejected and the old firmware keeps running.
 
 The serial monitor (115200 baud) prints the IP, every 10 s the printer state, the alerts sent
 and the job-log lines. The clock comes from NTP (US Eastern time), so the network needs

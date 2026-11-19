@@ -5,7 +5,7 @@ Other IP:                     pio run -e p1_ota -t upload --upload-port 192.168.
 By hand:                      python ota_upload.py 192.168.1.132 .pio/build/p1/firmware.bin
 
 The password is OTA_PASS from include/secrets.h (or the OTA_PASS environment variable).
-The ESP32 refuses while its printer has a job; set OTA_FORCE=1 to update anyway.
+Works while printing: monitoring pauses for the few seconds of the reboot.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def running_build(url: str) -> str | None:
         return None
 
 
-def upload(url: str, firmware: Path, password: str, force: bool) -> None:
+def upload(url: str, firmware: Path, password: str) -> None:
     data = firmware.read_bytes()
     boundary = uuid.uuid4().hex
     body = (
@@ -55,7 +55,7 @@ def upload(url: str, firmware: Path, password: str, force: bool) -> None:
         "Content-Type: application/octet-stream\r\n\r\n"
     ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
     req = urllib.request.Request(
-        f"{url}/update" + ("?force=1" if force else ""),
+        f"{url}/update",
         data=body,
         method="POST",
         headers={
@@ -88,7 +88,7 @@ def main() -> None:
     if before is None:
         sys.exit(f"ESP32 not reachable at {url} (check the IP: it comes from DHCP)")
     print(f"Running build: {before}")
-    upload(url, firmware, password, os.environ.get("OTA_FORCE") == "1")
+    upload(url, firmware, password)
     print("Uploaded, waiting for the reboot ...")
     time.sleep(4)
     deadline = time.time() + 60

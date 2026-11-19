@@ -7,7 +7,7 @@
 //   GET  /calib            calibration page
 //   GET  /data, /calibration, POST /calibration/start|cancel   (used by calibration.py)
 //   GET  /update           firmware update page
-//   POST /update[?force=1] firmware .bin (multipart, Basic auth ota:OTA_PASS; used by ota_upload.py)
+//   POST /update firmware .bin (multipart, Basic auth ota:OTA_PASS; used by ota_upload.py)
 #pragma once
 
 void webBegin();
