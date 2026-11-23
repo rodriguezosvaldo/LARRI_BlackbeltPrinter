@@ -846,8 +846,9 @@ async function poll() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     const s = await r.json();
-    for (const [key, p] of Object.entries(s.printers)) {
-      (cards[key] ||= new Card(key)).render(p);
+    // P2 on the left, P1 on the right (cards are appended in this order on the first poll)
+    for (const key of Object.keys(s.printers).sort().reverse()) {
+      (cards[key] ||= new Card(key)).render(s.printers[key]);
     }
     document.getElementById("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
