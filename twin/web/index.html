@@ -17,6 +17,14 @@
   header { display: flex; align-items: baseline; gap: 10px; padding: 6px 16px 0; }
   header h1 { margin: 0; font-size: .95rem; font-weight: 650; }
   header .sub { color: var(--muted); font-size: .75rem; }
+  /* "Data flow" button: the pulsing dot hints that the page is animated */
+  .flowbtn { align-self: center; margin-left: 18px; display: inline-flex; align-items: center; gap: 6px; padding: 2px 11px;
+             border: 1.5px solid var(--muted); border-radius: 99px; font-size: .75rem; font-weight: 600;
+             color: var(--text); background: var(--panel); text-decoration: none; transition: box-shadow .2s; }
+  .flowbtn:hover { box-shadow: 0 0 12px color-mix(in srgb, var(--text) 25%, transparent); }
+  .flowbtn i { width: 6px; height: 6px; border-radius: 50%; background: #46d9c8; animation: flow-dot 2.6s ease-in-out infinite; }
+  @keyframes flow-dot { 50% { opacity: .25; transform: scale(.6); } }
+  @media (prefers-reduced-motion: reduce) { .flowbtn i { animation: none; } }
   main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
          gap: 12px; padding: 6px 12px 12px; }
   /* side by side: the whole page fits the window, the 3D view takes the height left */
@@ -122,7 +130,7 @@
 <header>
   <h1>BlackBelt Twin</h1>
   <span class="sub" id="updated">connecting…</span>
-  <a class="sub" href="flow.html" style="margin-left:auto;color:var(--muted)">Data flow →</a>
+  <a class="flowbtn" href="flow.html"><i></i>Data flow</a>
 </header>
 <main id="printers"></main>
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BlackBelt data flow</title>
+<title>Data flow · BlackBelt Twin</title>
 <style>
   :root {
     --bg: #0e1013; --panel: #161a1f; --line: #2a3038; --text: #e8ecf0; --muted: #8a94a0;
@@ -22,19 +22,32 @@
          font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
   header { display: flex; align-items: center; gap: 14px; padding: 8px 16px; flex-wrap: wrap; }
   header h1 { margin: 0; font-size: 1rem; font-weight: 650; }
-  header a { color: var(--muted); font-size: .8rem; text-decoration: none; }
-  header a:hover { color: var(--text); }
+  .navbtn { margin-left: 18px; display: inline-flex; align-items: center; padding: 2px 11px;
+            border: 1.5px solid var(--muted); border-radius: 99px; font-size: .75rem; font-weight: 600;
+            color: var(--text); background: var(--panel); text-decoration: none; transition: box-shadow .2s; }
+  .navbtn:hover { box-shadow: 0 0 12px color-mix(in srgb, var(--text) 25%, transparent); }
   .ctrl { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: .8rem; color: var(--muted); }
   button { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 7px;
            font: inherit; font-size: .8rem; padding: 4px 10px; cursor: pointer; }
   button:hover { border-color: var(--muted); }
   button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--card)); }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 12px; padding: 0 12px 12px; }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
-  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-  svg#map { display: block; width: 100%; height: auto; }
-  aside { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
-          font-size: .88rem; align-self: start; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; padding: 0 12px 12px; }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+           display: flex; flex-direction: column; }
+  .mapwrap { flex: 1; min-height: 0; }
+  svg#map { display: block; width: 100%; height: 100%; }
+  .side { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  aside, .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  aside { padding: 14px 16px; font-size: .88rem; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .box { flex: none; }
+  .box h3 { margin: 0 0 6px; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  /* everything fits in the window, no page scrollbar (narrow screens stack and scroll instead) */
+  @media (min-width: 1001px) {
+    html, body { height: 100%; overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    main { flex: 1; min-height: 0; }
+  }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } .mapwrap { flex: none; } svg#map { height: auto; } }
   aside h2 { margin: 0 0 6px; font-size: 1rem; }
   aside h3 { margin: 14px 0 4px; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   aside p { margin: 6px 0; }
@@ -45,10 +58,10 @@
   .chip { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
   .ring { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--muted);
           margin-right: 6px; vertical-align: -1px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 14px; border-top: 1px solid var(--line);
-            font-size: .8rem; color: var(--muted); }
-  .stories { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); }
-  .stories .lbl { font-size: .8rem; color: var(--muted); margin-right: 4px; }
+  .stories, .legend { padding: 12px 16px; }
+  .legend { border-top: 1px solid var(--line); }
+  .stories .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .legend .items { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--muted); }
   .caption { display: none; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line);
              background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
   .caption.show { display: flex; }
@@ -85,16 +98,16 @@
 </head>
 <body>
 <header>
-  <h1>How data moves between the printers, the ESP32s and the PC</h1>
-  <a href="/">← Twin</a>
+  <h1>Data flow</h1>
+  <a class="navbtn" href="/">← Twin</a>
   <div class="ctrl">
     <button id="pause">Pause</button>
-    <label>Speed <input id="speed" type="range" min="0.25" max="3" step="0.25" value="1"></label>
+    <label>Speed <input id="speed" type="range" min="0.25" max="3" step="0.25" value="0.5"></label>
   </div>
 </header>
 <main>
   <div class="stage">
-    <svg id="map" viewBox="0 0 1200 750" role="img" aria-label="Data flow diagram"></svg>
+    <div class="mapwrap"><svg id="map" viewBox="0 0 1200 750" role="img" aria-label="Data flow diagram"></svg></div>
     <div class="caption" id="caption">
       <span class="step" id="capStep"></span>
       <span class="txt" id="capText"></span>
@@ -102,10 +115,14 @@
       <button id="capNext">Next</button>
       <button id="capExit">Exit</button>
     </div>
-    <div class="stories" id="stories"><span class="lbl">Show me what happens when…</span></div>
-    <div class="legend" id="legend"></div>
   </div>
-  <aside id="panel"></aside>
+  <div class="side">
+    <aside id="panel"></aside>
+    <div class="box">
+      <div class="stories"><h3>Scenarios</h3><div class="btns" id="stories"></div></div>
+      <div class="legend"><h3>Legend</h3><div class="items" id="legend"></div></div>
+    </div>
+  </div>
 </main>
 <div id="tip"></div>
 <script src="flow.js"></script>
