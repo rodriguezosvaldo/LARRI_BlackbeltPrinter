@@ -18,7 +18,6 @@ is still in the repo for reference but is not run.
 | [`load cel/hx711/`](load%20cel/hx711/) | Printer monitor + ntfy alerts + job logs, load cells, time left per spool, web dashboard | One ESP32 per printer |
 | [`log_server.py`](log_server.py) | Receives the ESP32s' job logs, replies and load-cell CSVs into `logs/` | PC (optional) |
 | [`twin/`](twin/) | Digital twin (read only): 3D view of the piece being printed, printed length, job %, time left and spools of both printers | PC (optional) |
-| [`dht22.cpp`](dht22.cpp) | Temperature/humidity monitoring and heater control for the print enclosure, with its own web UI | ESP32 |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
 
 ```
@@ -29,7 +28,6 @@ BB_printer/
 ├── run_twin.bat             # Windows launcher for the twin
 ├── alarm.py                 # previous PC printer monitor (reference, not run)
 ├── legacy_alarm.py          # older, larger version of alarm.py (reference only)
-├── dht22.cpp                # ESP32 enclosure temperature/humidity + heater controller
 ├── load cel/
 │   ├── hx711/               # PlatformIO project: the ESP32 firmware (monitor + load cells)
 │   ├── calibration.py       # serial/WiFi reader to calibrate load-cell thresholds
@@ -97,8 +95,6 @@ HTTP object model (`/rr_model`) and its two load cells, and sends phone notifica
 | P1 (.243) | ESP32-S3-WROOM-1 (`p1`) | GPIO 17 / 18 | GPIO 15 / 16 |
 | P2 (.188) | classic ESP32 (`p2`) | GPIO 21 / 22 | GPIO 18 / 19 |
 
-Calibration push button: GPIO 4 to GND on both boards.
-
 ### Setup
 
 1. Copy `load cel/hx711/include/secrets.example.h` to `secrets.h` (gitignored) and fill in WiFi,
@@ -138,7 +134,7 @@ internet access (also needed for ntfy).
 |-----|------|
 | `/` | Dashboard: both printers (state, job, layer) and, per spool, run-out time, time left, %, readings and rates. The page also asks the other ESP32 for its data. |
 | `/config` | Per-cell `full` / `empty` / `ref_rate` / note (what `spools.json` used to hold) and the other ESP32's URL. Saved in the ESP32's flash. |
-| `/calib` | Calibration: 100 readings per cell -> mean / std dev (also with the push button). A mean within 100k counts of the saved empty reel / full spool replaces it (saved to flash). |
+| `/calib` | Calibration: 100 readings per cell -> mean / std dev. A mean within 100k counts of the saved empty reel / full spool replaces it (saved to flash). |
 | `/api/spools`, `/api/config`, `/data`, `/calibration` | JSON APIs |
 
 **Time left** = `(reading − empty) / rate`. The live rate is the least-squares slope of the last
@@ -194,24 +190,7 @@ Printer and ESP32 addresses are at the top of `twin/twin_server.py` (or `TWIN_P1
 
 ---
 
-## 2. Enclosure climate controller (`dht22.cpp`)
-
-Arduino sketch for an ESP32 with two DHT22 sensors and a relay-driven heater.
-
-- Reads temperature and humidity from both sensors every 2 s and keeps a history for charts.
-- **Auto mode**: bang-bang control with hysteresis around a target temperature (using sensor 2).
-- **Manual mode**: force the heater on/off.
-- Software **PWM** on the heater relay (configurable period/on-time in ms).
-- Built-in web dashboard on port 80, plus a JSON API: `/data`, `/set`, `/mode`, `/manual`, `/pwm`.
-
-Default pins: DHT22 on GPIO 17 and 22, heater relay on GPIO 26. Copy
-`dht22_secrets.example.h` to `dht22_secrets.h` (gitignored) and fill in your WiFi SSID/password
-(keep it in the same folder as the sketch), then flash it with the Arduino IDE (ESP32 board package + *DHT sensor
-library*), and open the IP printed on the serial monitor.
-
----
-
-## 3. Load-cell calibration (`load cel/`)
+## 2. Load-cell calibration (`load cel/`)
 
 Cells are named `p1_cell1`, `p1_cell2` (printer 1, .243) and `p2_cell1`, `p2_cell2` (printer 2,
 .188); each printer has its own ESP32, whose `cell1`/`cell2` are that printer's cells. Values
@@ -225,8 +204,8 @@ are raw HX711 counts (no tare); the reading goes up with weight. A 4 kg spool is
 | `p2_cell1` | ~530     | pending    | fitted against a P2 print's extrusion CSV (P2 classic ESP32) |
 | `p2_cell2` | ~636     | −314,500   | fitted against a P2 print CSV; full spool +542,900 (P2 classic ESP32) |
 
-To measure a reference, put the spool (or empty reel) on the cell and either press the
-calibration button / open `/calib` on the ESP32, or run `calibration.py` (below). The ESP32
+To measure a reference, put the spool (or empty reel) on the cell and either open `/calib`
+on the ESP32, or run `calibration.py` (below). The ESP32
 calibration (~200 s, spool at rest, not printing) updates the cell's `empty` or `full` by itself
 when the mean is within 100k counts of the saved value, and keeps it in flash (NVS) across
 reboots and reflashes; `config.h` only holds the starting values. A value further off (e.g. the
@@ -245,7 +224,7 @@ prints the mean and standard deviation of every 100 readings per cell. Then ente
 
 ---
 
-## 4. Printer firmware files (`config.g/`, `macros/`)
+## 3. Printer firmware files (`config.g/`, `macros/`)
 
 Reference copies of what lives on each printer's SD card — edit here, then upload through
 Duet Web Control.

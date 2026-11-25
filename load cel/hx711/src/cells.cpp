@@ -39,10 +39,6 @@ CalibUpdate calibUpd[NUM_CELLS];  // what each cell's result did to empty/full
 unsigned long calibStartMs = 0;
 unsigned long calibEndMs = 0;
 
-bool buttonStable = HIGH;  // debounced level (pull-up: HIGH = released)
-bool buttonLastRaw = HIGH;
-unsigned long buttonChangedMs = 0;
-
 HX711 scale1;
 HX711 scale2;
 
@@ -89,21 +85,6 @@ void calibAddReading(long reading1, long reading2) {
   }
 }
 
-void checkButton() {
-  bool raw = digitalRead(CALIB_BUTTON_PIN);
-  if (raw != buttonLastRaw) {
-    buttonLastRaw = raw;
-    buttonChangedMs = millis();
-  }
-  if (raw != buttonStable && millis() - buttonChangedMs >= BUTTON_DEBOUNCE_MS) {
-    buttonStable = raw;
-    if (buttonStable == LOW) {  // pressed
-      if (calibState == CALIB_RUNNING) calibCancel();
-      else calibStart();
-    }
-  }
-}
-
 String cellJson(const CalibStats& c, const CalibUpdate& u) {
   String s = "{\"mean\":" + String(c.mean, 2) + ",\"std_dev\":" + String(c.stdDev(), 2) + ",\"result\":";
   s += u.result ? "\"" + String(u.result) + "\"" : String("null");
@@ -146,13 +127,11 @@ void readCells() {
 }  // namespace
 
 void cellsBegin() {
-  pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
   scale1.begin(HX1_DOUT, HX1_SCK);
   scale2.begin(HX2_DOUT, HX2_SCK);
 }
 
 void cellsLoop() {
-  checkButton();
   // Non-blocking timer instead of delay(), so the web server keeps responding between reads
   if (millis() - lastRead >= READ_INTERVAL_MS) {
     lastRead = millis();

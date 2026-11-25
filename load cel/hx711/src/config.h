@@ -39,7 +39,7 @@ const int HX2_SCK  = 16;
 #define PEER_URL      "http://192.168.1.226"  // P2's ESP32
 #endif
 // Defaults for the /config page (values from spools.json, 2026-10-27). Only used until a config
-// is saved to flash (NVS) from /config or by the calibration button; reflashing doesn't clear it.
+// is saved to flash (NVS) from /config or by a calibration; reflashing doesn't clear it.
 constexpr long DEF_FULL[2]  = {1778018, 933147};
 constexpr long DEF_EMPTY[2] = {930897, 88798};
 constexpr long DEF_REF[2]   = {13150, 12900};
@@ -82,14 +82,9 @@ constexpr const char* DEF_NOTE[2] = {
 // ============================ Load cells ============================
 const unsigned long READ_INTERVAL_MS = 2000;  // HX711 read period
 
-// --- Calibration button ---
-// External 4-leg tactile push button between GPIO 4 and GND (internal pull-up, active LOW).
-// GPIO 4 is free and not a strapping/USB/flash pin on both the S3 (P1) and classic ESP32 (P2).
-// Press = start a calibration, press again while running = cancel.
+// --- Calibration (started from /calib) ---
 // When it finishes, each cell's mean replaces its saved empty or full (whichever is within
 // CALIB_MATCH_TOLERANCE, closest first) and is saved to flash (NVS), like /config.
-const int CALIB_BUTTON_PIN = 4;
-const unsigned long BUTTON_DEBOUNCE_MS = 50;
 const int CALIB_WINDOW = 100;  // readings per cell, same WINDOW as calibration.py (~200 s at 2 s/reading)
 // Must stay below half the empty reel -> no reel step (~205k), so a removed reel never matches empty
 const double CALIB_MATCH_TOLERANCE = 100000;  // counts

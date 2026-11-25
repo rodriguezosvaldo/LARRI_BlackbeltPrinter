@@ -5,7 +5,7 @@
 //   - dashboard and JSON API on port 80                              web.cpp, pages.h
 //   - logs / CSV sent to the PC running log_server.py (optional)     pclog.cpp
 //
-// Tasks: loop() (core 1) = web server, button, HX711 reads.
+// Tasks: loop() (core 1) = web server, HX711 reads.
 //        core 0 = "reply" (seqs.reply every 0.5 s), "state" (every 10 s), "net" (ntfy + PC).
 #include <Arduino.h>
 #include <ESPmDNS.h>
