@@ -468,12 +468,17 @@ class PrinterView {
 
     new ResizeObserver(() => this.resize()).observe(el);
     this.resize();
+    this.printing = false; // set by render(): the nozzle only moves while the Duet is printing
+    let phase = 0, last = 0; // animation time (ms), only advances while printing
     const loop = (t = 0) => {
       const cam = this.cams[this.mode];
       this.ctrls[this.mode].update();
-      // nozzle line: smooth up/down along the gantry plane (period 4 s), belt → top of the layer
+      if (this.printing) phase += Math.min(t - last, 100);
+      last = t;
+      // nozzle line: smooth up/down along the gantry plane (period 4 s), belt → top of the layer;
+      // frozen where it is when not printing (paused, idle...)
       const s = this.sweep, nlo = this.nozzleLine;
-      const h = s ? s.h1 * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / 4000)) : 0;
+      const h = s ? s.h1 * (0.5 - 0.5 * Math.cos((2 * Math.PI * phase) / 4000)) : 0;
       nlo.position.set(0, BELT_Y + 0.5 + h, h * this.cot);
       nlo.scale.x = P.chamberW;
       this.renderer.render(scene, cam);
@@ -772,6 +777,7 @@ class Card {
     this.set("label", p.label);
     const job = p.job;
     this.main.updateSpools(p.spools);
+    this.main.printing = p.online && (p.status === "processing" || p.status === "simulating");
     const status = p.online ? p.status || "?" : "offline";
     this.f.status.textContent = status;
     this.f.status.className = `badge ${status}`;

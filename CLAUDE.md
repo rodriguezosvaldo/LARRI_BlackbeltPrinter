@@ -70,7 +70,9 @@ slow/offline PC or ntfy never delays polling or the web page.
 
 - **`printer.cpp`** (port of `alarm.py`, for this ESP32's printer only): `checkReply`
   (`seqs.reply` change → `/rr_reply` → logged on the PC only, no ntfy: pause/resume come from
-  `checkStateStatus`, print start/end from `checkJobLog`), and every 10 s `checkLayer`
+  `checkStateStatus`, print start/end from `checkJobLog`; the replies from the last `REQUEST_STATE_MS` + 5 s
+  are added to the "Print Paused" ntfy and the job-log `PAUSE` line as the reason), and every
+  10 s `checkLayer`
   → `checkStateStatus` → `checkJobLog` → `checkPartEdge` → `checkFilamentTime`. All Duet reads go through
   `duetModel()` = `GET {PRINTER_URL}/rr_model?key=...` (ArduinoJson, with a filter for `job`).
   See the [Object Model docs](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Documentation)
@@ -146,7 +148,7 @@ printers; verified with a real file). Views per printer: **3D** (default) / **To
 printer model (`PRINTER` sizes, mm) with only the printed part, moved along the belt from the
 nozzle line (part → printer = 180° turn about the vertical, not a mirror), spools sized by the
 load-cell % (green = feeding, red = not), the length already out of the printer, and an animated
-nozzle line on the gantry plane; **Part** = the piece alone, printed + still to print. Printed = layers with G-code Z ≤ belt Z (Duet
+nozzle line on the gantry plane (frozen in place unless `state.status` is processing/simulating); **Part** = the piece alone, printed + still to print. Printed = layers with G-code Z ≤ belt Z (Duet
 `machinePosition`; `G92 Z0` at the start makes it match the G-code). Job % and time left are filament based (`rawExtrusion` / `job.file.filament`,
 `timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
 `logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
