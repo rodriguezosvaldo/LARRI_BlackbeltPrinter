@@ -41,7 +41,7 @@ BB_printer/
 ### How data flows
 
 Arrows point where the data goes; "(X asks)" means X requests it, every other arrow is sent
-without being asked. The Duets never start a conversation, they only answer. Dotted = occasional.
+without being asked. The Duets never start a conversation, they only answer. Moving dashes = sent regularly, dotted = occasional.
 For an animated, clickable version with step-by-step stories, open
 `http://<pc>:5053/flow.html` while the twin is running ([`twin/web/flow.html`](twin/web/flow.html)).
 
@@ -60,16 +60,25 @@ flowchart LR
   NT(["ntfy.sh<br/>internet"])
   PH["Phone<br/>ntfy app"]
 
-  D -- "status every 10 s<br/>messages every 0.5 s<br/>(ESP32 asks)" --> E
-  C -- "weight every 2 s" --> E
-  E -- "alerts" --> NT
-  NT -- "push" --> PH
-  E -- "job log, messages,<br/>weights every minute" --> LS
-  LS -. "history at start-up<br/>(ESP32 asks)" .-> E
-  LS -- "saves" --> LOGS
-  D -- "status every 2 s, G-code<br/>(Twin asks)" --> TW
-  E -- "spools every 5 s<br/>(Twin asks)" --> TW
-  LOGS -. "past print times<br/>(Twin asks)" .-> TW
+  D e0@-->|"status every 10 s<br/>messages every 0.5 s<br/>(ESP32 asks)"| E
+  C e1@-->|"weight every 2 s"| E
+  E e2@-->|"alerts"| NT
+  NT e3@-->|"push"| PH
+  E e4@-->|"job log, messages,<br/>weights every minute"| LS
+  LS e5@-.->|"history at start-up<br/>(ESP32 asks)"| E
+  LS e6@-->|"saves"| LOGS
+  D e7@-->|"status every 2 s, G-code<br/>(Twin asks)"| TW
+  E e8@-->|"spools every 5 s<br/>(Twin asks)"| TW
+  LOGS e9@-.->|"past print times<br/>(Twin asks)"| TW
+
+  e0@{ animate: true }
+  e1@{ animate: true }
+  e2@{ animate: true }
+  e3@{ animate: true }
+  e4@{ animate: true }
+  e6@{ animate: true }
+  e7@{ animate: true }
+  e8@{ animate: true }
 
   linkStyle 0,7 stroke:#4ea8f2,stroke-width:2px
   linkStyle 1,8 stroke:#f2c14e,stroke-width:2px
