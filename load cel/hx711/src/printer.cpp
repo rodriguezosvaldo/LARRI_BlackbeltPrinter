@@ -37,6 +37,17 @@ bool jobPolled = false;  // false until the first job read: no "Print Started" f
 bool prevHasLayer = false;
 long prevLayer = 0;
 
+// Last Duet replies (written by the reply task, read by the state task on a pause to say why,
+// e.g. "Printing paused at ... due to filament error"), under stateLock
+const size_t RECENT_REPLIES = 4;
+const uint32_t PAUSE_REPLY_WINDOW_MS = REQUEST_STATE_MS + 5000;  // replies since the last poll
+struct {
+  String text;
+  uint32_t ms = 0;  // millis() when received, 0 = empty
+} recentReplies[RECENT_REPLIES];
+size_t recentNext = 0;
+String pauseReason;  // state task only: replies shown with the last pause (job log)
+
 // ============================ notify_once ============================
 SemaphoreHandle_t notifiedLock;
 std::vector<String> notified;
@@ -116,8 +127,28 @@ bool isPaused(const String& s) { return s == "pausing" || s == "paused"; }
 String layerText() { return prevHasLayer ? String(prevLayer) : String("None"); }
 
 void saveLastReply(const String& reply) {
+  xSemaphoreTake(stateLock, portMAX_DELAY);
+  recentReplies[recentNext].text = reply.substring(0, 200);
+  recentReplies[recentNext].ms = millis() | 1;
+  recentNext = (recentNext + 1) % RECENT_REPLIES;
+  xSemaphoreGive(stateLock);
   if (!timeValid()) return;
   pclogReply(fmtTime(time(nullptr), "%Y-%m-%d  %H:%M:%S") + "," + reply);
+}
+
+// Replies received in the last PAUSE_REPLY_WINDOW_MS, oldest first, one per line ("" = none)
+String recentReplyText() {
+  String out;
+  uint32_t now = millis();
+  xSemaphoreTake(stateLock, portMAX_DELAY);
+  for (size_t i = 0; i < RECENT_REPLIES; i++) {
+    const auto& r = recentReplies[(recentNext + i) % RECENT_REPLIES];
+    if (!r.ms || now - r.ms > PAUSE_REPLY_WINDOW_MS) continue;
+    if (out.length()) out += "\n";
+    out += r.text;
+  }
+  xSemaphoreGive(stateLock);
+  return out;
 }
 
 // New M118 / error / warning message: seqs.reply changes, then rr_reply has the text
@@ -171,9 +202,13 @@ String checkStateStatus() {
       notify("Printer Halted", String(slug) + "\nstate " + last + " -> halted (emergency stop)",
              "urgent", "rotating_light");
     } else if (isPaused(status) && !isPaused(last)) {
+      // Why: the Duet's replies just before the pause (filament error, M118 in the G-code...);
+      // a pause from DWC / M25 usually has none
+      pauseReason = recentReplyText();
       notify("Print Paused",
              String(slug) + "\nstate " + last + " -> " + status + "\nCurrent layer: " +
-                 layerText() + "\n",
+                 layerText() + "\n" +
+                 (pauseReason.length() ? "Duet: " + pauseReason : String("No Duet message")),
              "high", "pause_button");
     } else if (status == "resuming" || (isPrinting(status) && isPaused(last))) {
       notify("Print Resuming", String(slug) + "\nstate " + last + " -> " + status, "default",
@@ -374,7 +409,10 @@ void checkJobLog(const String& status) {
 
   if (isPaused(status) && !jobLog.pauseStart) {
     jobLog.pauseStart = now;
-    jobWrite("PAUSE   " + fmtDt(now));
+    String reason = pauseReason;
+    reason.replace("\n", " | ");
+    jobWrite("PAUSE   " + fmtDt(now) + (reason.length() ? "  (" + reason + ")" : ""));
+    pauseReason = "";
   } else if (!isPaused(status) && jobLog.pauseStart) {
     jobLogResume(now);
   }
@@ -388,6 +426,9 @@ void checkJobLog(const String& status) {
 // (belt Z = move.axes Z machinePosition, ≈ 0 at the start thanks to G92 Z0)
 void checkPartEdge(const String& status) {
   if (!jobLog.active || jobLog.edgeWarned || !isPrinting(status)) return;
+  // Not before the first layer: during the start G-code (heating, G28) the belt Z still holds the
+  // previous print's end position until G92 Z0 (prevLayer is fresh: checkLayer runs first)
+  if (!prevHasLayer || prevLayer < 1) return;
   JsonDocument filter;
   filter["result"][0]["letter"] = true;
   filter["result"][0]["machinePosition"] = true;

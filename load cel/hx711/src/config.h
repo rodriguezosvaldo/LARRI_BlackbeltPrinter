@@ -118,6 +118,7 @@ const double FILAMENT_CLEAR_HOURS = 10;  // re-arm the alert above this
 const double FILAMENT_DIAMETER = 1.75;    // mm - for volumetric rate in the job log
 // Part leaving the printer: the belt carries the first printed end from the nozzle line (belt Z
 // = 0 after the start G92 Z0) to the front edge PRINTER_FRONT_MM ahead (twin PRINTER.front).
-// One ntfy per job when belt Z (move.axes Z machinePosition) reaches front − warn distance.
+// One ntfy per job when belt Z (move.axes Z machinePosition) reaches front − warn distance,
+// only checked from job.layer ≥ 1 (before that Z is still the previous print's).
 const double PRINTER_FRONT_MM = 800;      // nozzle line -> front edge of the belt
 const double PART_EDGE_WARN_MM = 10;      // warn this much before the part reaches the edge
