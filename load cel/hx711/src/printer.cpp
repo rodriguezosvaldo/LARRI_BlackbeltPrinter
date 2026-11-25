@@ -426,6 +426,9 @@ void checkJobLog(const String& status) {
 // (belt Z = move.axes Z machinePosition, ≈ 0 at the start thanks to G92 Z0)
 void checkPartEdge(const String& status) {
   if (!jobLog.active || jobLog.edgeWarned || !isPrinting(status)) return;
+  // Not before the first layer: during the start G-code (heating, G28) the belt Z still holds the
+  // previous print's end position until G92 Z0 (prevLayer is fresh: checkLayer runs first)
+  if (!prevHasLayer || prevLayer < 1) return;
   JsonDocument filter;
   filter["result"][0]["letter"] = true;
   filter["result"][0]["machinePosition"] = true;

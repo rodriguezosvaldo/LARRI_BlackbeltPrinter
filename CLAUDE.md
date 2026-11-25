@@ -87,7 +87,8 @@ slow/offline PC or ntfy never delays polling or the web page.
     and maps `key` (base + start unix) to it. Extruded length = sum of positive
     `job.rawExtrusion` deltas. A new job also sends the "Print Started" ntfy, skipped on the
     first job read after boot (`jobPolled`) so a print already running isn't announced.
-  - `checkPartEdge`: while printing, reads belt Z (`move.axes` Z `machinePosition`, ≈ 0 at the
+  - `checkPartEdge`: while printing and from `job.layer` ≥ 1 (during the start G-code Z still
+    holds the previous print's position until its `G92 Z0`), reads belt Z (`move.axes` Z `machinePosition`, ≈ 0 at the
     start by `G92 Z0`) and, once per job, notifies "Part Reaching Edge" (+ `EDGE` job-log line)
     when it reaches `PRINTER_FRONT_MM` − `PART_EDGE_WARN_MM`; skipped if a job running at boot
     is already past it.
