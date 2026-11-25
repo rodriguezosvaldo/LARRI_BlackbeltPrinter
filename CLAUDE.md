@@ -16,9 +16,7 @@ the PC only stores logs. Parts:
 2. **`log_server.py`** — PC log receiver (stdlib only, port 5052): the ESP32s POST job-log lines,
    printer replies and load-cell rows; written to `logs/` in the old formats.
 3. **`twin/`** — read-only digital twin web app on the PC (stdlib only, port 5053), see below.
-4. **`dht22.cpp`** — standalone ESP32 Arduino sketch for a temperature/humidity +
-   heater-control web UI for the print environment. Unrelated to the rest at the code level.
-4b. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
+4. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
    (planned use: move the Hall magnet to drive retraction/feed). Own PlatformIO project
    (`pio run -t upload -t monitor` from that folder, ESP32-S3 like P1, own gitignored
    `include/secrets.h` with WiFi only). `src/esp32_temp.cpp`: Waveshare Bus Servo Adapter (A)
@@ -63,7 +61,7 @@ over WiFi: `pio run -e p1_ota|p2_ota -t upload` runs `ota_upload.py`, which POST
 constants ported from the Python (`RATE_WINDOW`, `JUMP_THRESHOLD`, `TENSION_OFFSET`,
 `FILAMENT_LOW_HOURS`, ...). Keep both printers' blocks in sync when adding a setting.
 
-Tasks: `loop()` (core 1) runs the web server, button and HX711 reads; on core 0, `reply`
+Tasks: `loop()` (core 1) runs the web server and HX711 reads; on core 0, `reply`
 (every `REQUEST_REPLY_MS` = 0.5 s), `state` (every 10 s) and `net` (sends ntfy + PC logs) tasks.
 HTTP calls that may be slow (ntfy over TLS, the PC) only happen in `net`, through queues, so a
 slow/offline PC or ntfy never delays polling or the web page.
@@ -104,7 +102,7 @@ slow/offline PC or ntfy never delays polling or the web page.
   `spoolReady()` (clock set by NTP and the PC history reload attempted).
 - **`cells.cpp`**: HX711 reads every 2 s (non-blocking `millis()` timer), serial
   `HX711 #<n> reading: <raw>` (parsed by `calibration.py` — update its regex if this changes),
-  on-board calibration (button GPIO 4 or `/calib`, Welford mean/std over `CALIB_WINDOW` = 100,
+  on-board calibration (`/calib`, Welford mean/std over `CALIB_WINDOW` = 100,
   `[calib] ...` serial lines). When done, `spoolCalibrate()` replaces the cell's `empty` or
   `full` (closest within `CALIB_MATCH_TOLERANCE`, skipped if std > `CALIB_MAX_STD` or the cell
   is consuming) and saves the config to NVS like `/config`. Feeds `spoolAdd` and `pclogCells`.
@@ -154,6 +152,9 @@ nozzle line on the gantry plane (frozen in place unless `state.status` is proces
 `timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
 `logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
 shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
+`web/flow.html` + `flow.js` (static, no API): animated data-flow diagram (who asks whom, timings
+from `config.h` / `pclog.cpp` / `twin_server.py`); `NODES`/`FLOWS`/`STORIES` are hand-written —
+update them when a poll period or a request between devices changes. `#story-N` opens a story.
 
 ## `load cel/calibration.py`
 
@@ -163,17 +164,6 @@ skipping repeated `seq`) feeds a shared queue; prints mean / std-dev per printer
 readings (also appended to `load cel/calibration_<P1|P2>_cell<N>.log`).
 `python calibration.py report [DIR]` (also run on Ctrl+C) rebuilds `calibration_results.txt`
 from the logs; text below its "Manual notes" marker is kept.
-
-## `dht22.cpp` (ESP32 sketch)
-
-Single-file Arduino sketch: reads two DHT22 sensors, drives a relay-controlled heater with
-software PWM (period/pulse in ms), and serves its own embedded-HTML dashboard + JSON API
-(`/data`, `/set`, `/mode`, `/manual`, `/pwm`) on port 80. Control logic: `updateControl()`
-decides the logical `heating` state (auto bang-bang with `HYSTERESIS` on `controlTemp()` =
-sensor 2 by default, or manual), `relayStatus()`/`pwmUpdate()` chop that into the physical PWM
-signal on `HEATER_PIN`. WiFi credentials come from `dht22_secrets.h` (gitignored; template in
-`dht22_secrets.example.h`, which must sit next to the sketch). Never hardcode credentials in
-tracked files.
 
 ## `config.g/` and `macros/`
 

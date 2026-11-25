@@ -294,7 +294,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </body>
 </html>)rawliteral";
 
-// Calibration page (button + live mean / std dev), same as before on "/"
+// Calibration page (start/cancel + live mean / std dev), same as before on "/"
 const char CALIB_HTML[] PROGMEM = R"rawliteral(<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Load cell calibration</title>
