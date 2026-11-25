@@ -154,6 +154,9 @@ nozzle line on the gantry plane (frozen in place unless `state.status` is proces
 `timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
 `logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
 shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
+`web/flow.html` + `flow.js` (static, no API): animated data-flow diagram (who asks whom, timings
+from `config.h` / `pclog.cpp` / `twin_server.py`); `NODES`/`FLOWS`/`STORIES` are hand-written —
+update them when a poll period or a request between devices changes. `#story-N` opens a story.
 
 ## `load cel/calibration.py`
 

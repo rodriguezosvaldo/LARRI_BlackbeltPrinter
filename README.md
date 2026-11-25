@@ -40,6 +40,45 @@ BB_printer/
 └── GCODE_CHEATSHEET.md      # G/M-codes used in the config and macros
 ```
 
+### How data flows
+
+Arrows point where the data goes; "(X asks)" means X requests it, every other arrow is sent
+without being asked. The Duets never start a conversation, they only answer. Dotted = occasional.
+For an animated, clickable version with step-by-step stories, open
+`http://<pc>:5053/flow.html` while the twin is running ([`twin/web/flow.html`](twin/web/flow.html)).
+
+```mermaid
+flowchart LR
+  subgraph PR["Each printer (same for P1 and P2)"]
+    D["Duet 3<br/>printer board"]
+    C["Load cells<br/>2 spools"]
+    E["ESP32<br/>bb-p1 / bb-p2.local"]
+  end
+  subgraph PC["Lab PC (optional)"]
+    LS["Log Server<br/>port 5052"]
+    LOGS[("logs/")]
+    TW["Digital Twin<br/>port 5053"]
+  end
+  NT(["ntfy.sh<br/>internet"])
+  PH["Phone<br/>ntfy app"]
+
+  D -- "status every 10 s<br/>messages every 0.5 s<br/>(ESP32 asks)" --> E
+  C -- "weight every 2 s" --> E
+  E -- "alerts" --> NT
+  NT -- "push" --> PH
+  E -- "job log, messages,<br/>weights every minute" --> LS
+  LS -. "history at start-up<br/>(ESP32 asks)" .-> E
+  LS -- "saves" --> LOGS
+  D -- "status every 2 s, G-code<br/>(Twin asks)" --> TW
+  E -- "spools every 5 s<br/>(Twin asks)" --> TW
+  LOGS -. "past print times<br/>(Twin asks)" .-> TW
+
+  linkStyle 0,7 stroke:#4ea8f2,stroke-width:2px
+  linkStyle 1,8 stroke:#f2c14e,stroke-width:2px
+  linkStyle 2,3 stroke:#ff8a3d,stroke-width:2px
+  linkStyle 4,5,6,9 stroke:#3ccf7a,stroke-width:2px
+```
+
 ---
 
 ## 1. Printer monitor on the ESP32 (`load cel/hx711/`)
@@ -146,6 +185,9 @@ One page with both printers, read only (it never sends commands):
   and reference rate, and Calibration / Config buttons that open that ESP32's pages. Hovering
   them shows when the cell's empty / full / reference rate last changed; the ESP32s don't keep
   that date, so the twin records it (`twin/cell_updates.json`) while it is running.
+
+- **Data flow** (`/flow.html`, link at the top of the twin): animated diagram of who asks whom
+  and how often, with step-by-step stories (print starts, pauses, spool low, ...).
 
 Printer and ESP32 addresses are at the top of `twin/twin_server.py` (or `TWIN_P1_DUET`,
 `TWIN_P1_ESP`, ... environment variables).
