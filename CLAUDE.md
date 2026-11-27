@@ -40,12 +40,11 @@ See `README.md` for the user-facing overview and setup steps.
 
 ```bash
 cd "load cel/hx711"
-pio run -e p1 -t upload -t monitor   # P1: ESP32-S3; -e p2 = P2: classic ESP32
+pio run -e p1 -t upload -t monitor   # -e p2 for P2 (both ESP32-S3-WROOM-1)
 python log_server.py                 # on the PC (or run_log_server.bat)
 ```
 
-`pio` may not be on PATH: it is at `~/.platformio/penv/Scripts/pio.exe`. Both envs must compile
-(P2's flash is ~80% used). There is no test suite or linter.
+`pio` may not be on PATH: it is at `~/.platformio/penv/Scripts/pio.exe`. Both envs must compile. There is no test suite or linter.
 
 **`load cel/hx711/include/secrets.h`** (gitignored; template `secrets.example.h`) defines
 `WIFI_SSID`, `WIFI_PASS`, `NTFY1`, `NTFY2`, optional `LOG_SERVER_URL` (`http://<pc-ip>:5052`,
@@ -117,9 +116,9 @@ slow/offline PC or ntfy never delays polling or the web page.
   `/calibration`, `/calibration/start|cancel`, `/update` (page + POST firmware, `Update` lib,
   restart 1.5 s after success). `/api/spools` also has `fw` (= build date/time `FW_BUILD`).
 
-Pins: P1 (S3) cell 1 DOUT 17 / SCK 18, cell 2 DOUT 15 / SCK 16 — avoid GPIO 19/20 on the S3
-(native USB); P2 (classic) 21/22, 18/19. The ESP32s get their IP by DHCP; `PEER_URL` (or
-`/config`) and `calibration.py` (`P1_IP` = `192.168.1.132`, `P2_IP` = `192.168.1.226`) must
+Pins (both S3): cell 1 DOUT 17 / SCK 18, cell 2 DOUT 15 / SCK 16 — avoid GPIO 19/20
+(native USB). The ESP32s get their IP by DHCP; `PEER_URL` (or
+`/config`) and `calibration.py` (`P1_IP` = `192.168.1.132`, `P2_IP` = `192.168.1.187`) must
 match. mDNS names: `bb-p1.local`, `bb-p2.local`. Cells are named `p1_cell1`/`p1_cell2`,
 `p2_cell1`/`p2_cell2`. `hx711/.pio/` is build output — don't edit.
 
