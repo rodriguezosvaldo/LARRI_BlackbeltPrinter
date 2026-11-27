@@ -104,6 +104,12 @@ for (const p of [2, 1]) {
     detail: "% left, feeding or not, time left, for the spools in the 3D view." });
 }
 
+addFlow({ id: "twin-ntfy", a: "twin", b: "ntfy", kind: "push", cat: "alert", period: null,
+  when: "only while an ESP32 is offline", label: "backup alerts", lx: 722, ly: 505, anchor: "end",
+  pts: [[700, 106], [732, 106], [732, 572], [700, 588]],
+  title: "Backup alerts",
+  detail: "If an ESP32 doesn't answer for 2 min while its Duet does, the Twin sends “ESP32 Offline” and that printer's alerts (backup_monitor.py) until the ESP32 is back." });
+
 addNode("twin", 600, 90, "twin", "var(--c-gcode)", "Digital Twin", "PC · port 5053",
   "Live 3D view of both printers. Read-only: requests data, never sends commands.");
 addNode("logs", 600, 250, "folder", "var(--c-logs)", "logs/ folder", "files on the PC",
@@ -168,6 +174,13 @@ const STORIES = [
     { text: "On boot, ESP32 requests the last 2 h of spool weights.", flows: ["p1-esp-boot"] },
     { text: "Time left is available immediately; new readings continue.", flows: ["p1-cells-esp"] },
     { text: "Duet polling resumes.", flows: ["p1-esp-model"] },
+  ] },
+  { title: "ESP32 goes offline", steps: [
+    { text: "Twin asks the ESP32 for its spools every 5 s: no answer for 2 min.", flows: ["p1-twin-spools"] },
+    { text: "The Duet still answers the Twin, so the printer is on.", flows: ["p1-twin-model"] },
+    { text: "Twin sends “ESP32 Offline” and from now on the printer alerts.", flows: ["twin-ntfy", "ntfy-phone"] },
+    { text: "ESP32 answers twice in a row → “ESP32 Back Online”, it sends the alerts again.",
+      flows: ["p1-twin-spools", "twin-ntfy", "p1-esp-ntfy"] },
   ] },
 ];
 

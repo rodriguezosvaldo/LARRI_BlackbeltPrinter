@@ -9,6 +9,10 @@ Polls each Duet (rr_model) and each ESP32 (/api/spools) and serves twin/web/:
 
 The G-code of a new job is downloaded once from the Duet (rr_download, ~2 min for 30 MB) and the
 reduced piece is cached in twin/cache/. Nothing is ever sent to the printers besides these GETs.
+
+ESP32 watchdog: when an ESP32's /api/spools hasn't answered for backup_monitor.ESP_DOWN_S while
+its Duet does, the twin sends "ESP32 Offline" to that printer's ntfy topic and runs
+backup_monitor.Monitor (the printer alerts) until the ESP32 answers again (TWIN_BACKUP=0: off).
 """
 
 import csv
@@ -30,6 +34,7 @@ import gcode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from log_server import HISTORY_FILE, part_name  # noqa: E402  (same part rule as the CSV)
+import backup_monitor as backup  # noqa: E402  (ESP32 watchdog)
 
 PORT = int(os.getenv("TWIN_PORT", "5053"))
 PRINTERS = {
@@ -47,6 +52,7 @@ PRINTERS = {
 DUET_POLL_S = 2  # the ESP32 also polls the Duet: don't go much lower
 ESP_POLL_S = 5
 PIECE_RETRY_S = 60
+BACKUP_ENABLED = os.getenv("TWIN_BACKUP", "1") != "0"
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
@@ -67,6 +73,7 @@ cell_log: dict = {}  # "p1/cell1" -> {"values": {...}, "updated": unix | None, "
 cell_log_lock = threading.Lock()
 history_lock = threading.Lock()
 history_cache: dict = {"mtime": None, "parts": {}}  # part -> (sum of print_min, count)
+backups: dict = {}  # printer key -> backup.Monitor while its ESP32 is offline (poll_esp only)
 
 
 def history_for(part: str) -> dict | None:
@@ -218,7 +225,70 @@ def poll_esp(key: str) -> None:
             upd = {"spools_online": False, "spools_error": str(e)}
         with lock:
             state[key].update(upd)
+        if BACKUP_ENABLED:
+            watch.update(key, "spools" in upd)  # answered (spools_online = HX711 state)
         time.sleep(ESP_POLL_S)
+
+
+# ============================ ESP32 watchdog ============================
+class Watchdog:
+    """Starts backup_monitor for a printer whose ESP32 stopped answering (poll_esp threads)."""
+
+    def __init__(self) -> None:
+        self.last_ok: dict = {}    # key -> time.monotonic() of the last answer (or of the start)
+        self.ok_in_row: dict = {}  # key -> answers in a row
+        self.disabled = False      # no ntfy topic: logged once
+
+    def update(self, key: str, answered: bool) -> None:
+        now = time.monotonic()
+        self.last_ok.setdefault(key, now)  # down since the twin started counts too
+        if answered:
+            self.last_ok[key] = now
+            self.ok_in_row[key] = self.ok_in_row.get(key, 0) + 1
+            if key in backups and self.ok_in_row[key] >= backup.ESP_BACK_OK:
+                self.stop(key)
+            return
+        self.ok_in_row[key] = 0
+        down = now - self.last_ok[key]
+        if key in backups or self.disabled or down < backup.ESP_DOWN_S:
+            return
+        with lock:
+            duet_online = state[key].get("online")
+            status = state[key].get("status")
+            job = state[key].get("job")
+        if not duet_online:
+            return  # Duet unreachable too: printer off or the PC's network is down
+        self.start(key, down, status, job)
+
+    def start(self, key: str, down: float, status, job) -> None:
+        try:
+            mon = backup.Monitor(key, duet=PRINTERS[key]["duet"], verbose=False)
+        except RuntimeError as e:
+            print(f"[watchdog] can't start the backup monitor: {e}")
+            self.disabled = True
+            return
+        busy = status in backup.PRINTING | backup.PAUSED | {"resuming"}
+        mon.notify("ESP32 Offline",
+                   f"{mon.short} ESP32 not answering for {down / 60:.0f} min: the PC sends this "
+                   f"printer's alerts until it's back (no Filament Low)\n"
+                   f"Duet state: {status}" + (f"\nJob: {job['file']}" if job else ""),
+                   "urgent" if busy else "high", "rotating_light,computer")
+        mon.start()
+        backups[key] = mon
+        with lock:
+            state[key]["backup"] = True
+
+    def stop(self, key: str) -> None:
+        mon = backups.pop(key)
+        mon.stop()
+        mon.notify("ESP32 Back Online",
+                   f"{mon.short} ESP32 answering again: it sends the alerts from now on",
+                   tags="white_check_mark")
+        with lock:
+            state[key]["backup"] = False
+
+
+watch = Watchdog()
 
 
 # ============================ Piece (G-code / STL) ============================
@@ -376,7 +446,7 @@ def main() -> None:
     for key, cfg in PRINTERS.items():
         state[key] = {"key": key, "label": cfg["label"], "esp": cfg["esp"],
                       "online": False, "error": "not polled yet",
-                      "spools_online": False, "piece": {"status": "none"}}
+                      "spools_online": False, "backup": False, "piece": {"status": "none"}}
         threading.Thread(target=poll_duet, args=(key,), daemon=True).start()
         threading.Thread(target=poll_esp, args=(key,), daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)

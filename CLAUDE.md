@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Monitoring and configuration for two BlackBelt 3D printers (Duet 3 MB 6HC mainboard + 3HC
 expansion board, RepRapFirmware) at `192.168.1.243` (printer 1) and `192.168.1.188`
 (printer 2). All monitoring runs on the ESP32s (one per printer);
-the PC only stores logs. Parts:
+the PC only stores logs (and, from the twin, sends the printer alerts while an ESP32 is offline). Parts:
 
 1. **`load cel/hx711/`** — PlatformIO firmware, one build per printer (`pio run -e p1` / `-e p2`):
    printer monitor (port of `alarm.py`: Duet polling, ntfy alerts, job logs), load cells (two
@@ -16,7 +16,11 @@ the PC only stores logs. Parts:
 2. **`log_server.py`** — PC log receiver (stdlib only, port 5052): the ESP32s POST job-log lines,
    printer replies and load-cell rows; written to `logs/` in the old formats.
 3. **`twin/`** — read-only digital twin web app on the PC (stdlib only, port 5053), see below.
-4. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
+4. **`backup_monitor.py`** — `Monitor(key)`: port of `printer.cpp`'s ntfy alerts for one
+   printer (no Filament Low, no job logs), `start()`/`stop()` threads; run by the twin's
+   watchdog or by hand (`python backup_monitor.py p1|p2`). Keep its alert texts/conditions and
+   constants in sync with `printer.cpp` / `config.h`.
+5. **`temporal_servo_test/`** — temporary test bench for a Feetech STS3215 12 V bus servo
    (planned use: move the Hall magnet to drive retraction/feed). Own PlatformIO project
    (`pio run -t upload -t monitor` from that folder, ESP32-S3 like P1, own gitignored
    `include/secrets.h` with WiFi only). `src/esp32_temp.cpp`: Waveshare Bus Servo Adapter (A)
@@ -25,10 +29,10 @@ the PC only stores logs. Parts:
    `/api/state` (cached, polled every 100 ms), `/api/info` (EEPROM), `/api/cmd?c=<console cmd>`
    (returns the command's output). `servo_web.py` (stdlib, port 5054) serves `web/index.html`
    on localhost and proxies `/api/*` to the ESP32.
-5. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
+6. **`config.g/` and `macros/`** — RepRapFirmware config and G-code macro files that live on
    each printer's SD card, kept here for reference/version control. `GCODE_CHEATSHEET.md`
    documents the G/M-codes used in them.
-6. **Reference only, not run:** `alarm.py`, `load cel/spool_monitor.py` (+ `.html`,
+7. **Reference only, not run:** `alarm.py`, `load cel/spool_monitor.py` (+ `.html`,
    `spools.json`), `run_alarm.bat` — the previous PC version; `legacy_alarm.py` — an older,
    larger `alarm.py` (stall detection, MCU temp, VIN, heater/filament-sensor faults). When
    porting a check from them, follow the firmware's conventions (`prev*` edge detection,
@@ -151,6 +155,11 @@ nozzle line on the gantry plane (frozen in place unless `state.status` is proces
 `timesLeft.filament`), like DWC. `job.history` = average `print_min` of the same part in
 `logs/print_time_history.csv` (`history_for`, imports `part_name` from `log_server.py`); the page
 shows "historic end" = now + average − `job.duration` (the Duet excludes pauses from it).
+ESP32 watchdog (`Watchdog`, fed by `poll_esp`): `/api/spools` unanswered for
+`backup.ESP_DOWN_S` (120 s, from twin start too) while `state[key].online` (Duet answers) →
+"ESP32 Offline" ntfy + `backup_monitor.Monitor` in `backups[key]`, `state[key].backup` = true
+(shown on the card); stopped with "ESP32 Back Online" after `ESP_BACK_OK` answers in a row.
+`TWIN_BACKUP=0` disables it.
 `web/flow.html` + `flow.js` (static, no API): animated data-flow diagram (who asks whom, timings
 from `config.h` / `pclog.cpp` / `twin_server.py`); `NODES`/`FLOWS`/`STORIES` are hand-written —
 update them when a poll period or a request between devices changes. `#story-N` opens a story.

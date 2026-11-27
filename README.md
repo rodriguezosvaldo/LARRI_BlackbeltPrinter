@@ -16,6 +16,7 @@ is still in the repo for reference but is not run.
 | Part | What it does | Runs on |
 |------|--------------|---------|
 | [`load cel/hx711/`](load%20cel/hx711/) | Printer monitor + ntfy alerts + job logs, load cells, time left per spool, web dashboard | One ESP32 per printer |
+| [`backup_monitor.py`](backup_monitor.py) | Printer alerts from the PC while an ESP32 is offline (started by the twin, or by hand) | PC (when needed) |
 | [`log_server.py`](log_server.py) | Receives the ESP32s' job logs, replies and load-cell CSVs into `logs/` | PC (optional) |
 | [`twin/`](twin/) | Digital twin (read only): 3D view of the piece being printed, printed length, job %, time left and spools of both printers | PC (optional) |
 | [`config.g/`](config.g/), [`macros/`](macros/) | RepRapFirmware config and macros stored on each printer's SD card (reference copies) | Duet 3 board |
@@ -26,6 +27,7 @@ BB_printer/
 ├── run_log_server.bat       # Windows launcher
 ├── twin/                    # digital twin web app for both printers (stdlib only)
 ├── run_twin.bat             # Windows launcher for the twin
+├── backup_monitor.py        # PC printer alerts while an ESP32 is offline (used by the twin)
 ├── alarm.py                 # previous PC printer monitor (reference, not run)
 ├── legacy_alarm.py          # older, larger version of alarm.py (reference only)
 ├── load cel/
@@ -70,6 +72,7 @@ flowchart LR
   D e7@-->|"status every 2 s, G-code<br/>(Twin asks)"| TW
   E e8@-->|"spools every 5 s<br/>(Twin asks)"| TW
   LOGS e9@-.->|"past print times<br/>(Twin asks)"| TW
+  TW e10@-.->|"alerts only while<br/>an ESP32 is offline"| NT
 
   e0@{ animate: true }
   e1@{ animate: true }
@@ -82,7 +85,7 @@ flowchart LR
 
   linkStyle 0,7 stroke:#4ea8f2,stroke-width:2px
   linkStyle 1,8 stroke:#f2c14e,stroke-width:2px
-  linkStyle 2,3 stroke:#ff8a3d,stroke-width:2px
+  linkStyle 2,3,10 stroke:#ff8a3d,stroke-width:2px
   linkStyle 4,5,6,9 stroke:#3ccf7a,stroke-width:2px
 ```
 
@@ -190,6 +193,15 @@ One page with both printers, read only (it never sends commands):
   and reference rate, and Calibration / Config buttons that open that ESP32's pages. Hovering
   them shows when the cell's empty / full / reference rate last changed; the ESP32s don't keep
   that date, so the twin records it (`twin/cell_updates.json`) while it is running.
+
+- **ESP32 watchdog:** if an ESP32's `/api/spools` doesn't answer for 2 min while its Duet
+  does, the twin sends **"ESP32 Offline"** to that printer's ntfy topic and takes over its
+  printer alerts ([`backup_monitor.py`](backup_monitor.py): start, pause with reason, resume,
+  stop, halt, finish/cancel, part reaching edge, marked "(PC backup monitor)"; no Filament Low,
+  no job logs) until the ESP32 answers twice in a row ("ESP32 Back Online"). The printer card
+  shows it while active. `TWIN_BACKUP=0` turns it off. Without the twin running:
+  `python backup_monitor.py p1|p2` (exits when the ESP32 answers, `--keep` to stay).
+  Not detected: an ESP32 that answers but can't reach ntfy.
 
 - **Data flow** (`/flow.html`, link at the top of the twin): animated diagram of who asks whom
   and how often, with step-by-step stories (print starts, pauses, spool low, ...).

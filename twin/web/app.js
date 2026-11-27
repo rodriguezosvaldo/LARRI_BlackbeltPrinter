@@ -842,7 +842,8 @@ class Card {
 
     // spools (same logic as the ESP32 spool monitor, load cel/hx711/src/pages.h), always shown
     for (const [name, c] of Object.entries(p.spools || {})) this.renderSpool(name, c, p.esp);
-    this.set("spoolerr", p.spools_online ? "" : `Load cells: ${p.spools_error || "offline"}`);
+    this.set("spoolerr", (p.spools_online ? "" : `Load cells: ${p.spools_error || "offline"}`) +
+      (p.backup ? " · ESP32 offline: the PC is sending this printer's alerts" : ""));
   }
 }
 
