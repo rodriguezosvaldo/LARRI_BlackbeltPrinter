@@ -41,7 +41,7 @@ PRINTERS = {
     "p2": {
         "label": "Printer 2 (188)",
         "duet": os.getenv("TWIN_P2_DUET", "http://192.168.1.188"),
-        "esp": os.getenv("TWIN_P2_ESP", "http://192.168.1.226"),  # = P2_IP in calibration.py
+        "esp": os.getenv("TWIN_P2_ESP", "http://192.168.1.187"),  # = P2_IP in calibration.py
     },
 }
 DUET_POLL_S = 2  # the ESP32 also polls the Duet: don't go much lower

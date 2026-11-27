@@ -36,7 +36,7 @@ const int HX2_SCK  = 16;
 #define NTFY_URL      NTFY1
 #define HOSTNAME      "bb-p1"
 #ifndef PEER_URL
-#define PEER_URL      "http://192.168.1.226"  // P2's ESP32
+#define PEER_URL      "http://192.168.1.187"  // P2's ESP32
 #endif
 // Defaults for the /config page (values from spools.json, 2026-10-27). Only used until a config
 // is saved to flash (NVS) from /config or by a calibration; reflashing doesn't clear it.
@@ -48,11 +48,11 @@ constexpr const char* DEF_NOTE[2] = {
     "full ESTIMATED = empty + avg (full - empty) of other cells (844,349); weigh a new spool to confirm"};
 
 #elif PRINTER_NUM == 2
-// --- P2-188: classic ESP32 (ESP32-WROOM-32 DevKit) ---
-const int HX1_DOUT = 21;
-const int HX1_SCK  = 22;
-const int HX2_DOUT = 18;
-const int HX2_SCK  = 19;
+// --- P2-188: ESP32-S3-WROOM-1 (same board and pins as P1; was a classic ESP32 until 2026-11) ---
+const int HX1_DOUT = 17;
+const int HX1_SCK  = 18;
+const int HX2_DOUT = 15;
+const int HX2_SCK  = 16;
 #define PRINTER_KEY   "p2"
 #define PRINTER_NAME  "Printer 2"
 #define PRINTER_LABEL "Printer 2 (188)"
@@ -63,8 +63,9 @@ const int HX2_SCK  = 19;
 #ifndef PEER_URL
 #define PEER_URL      "http://192.168.1.132"  // P1's ESP32
 #endif
-constexpr long DEF_FULL[2]  = {1332526, 542885};
-constexpr long DEF_EMPTY[2] = {504732, -315248};
+// Values from the old board's NVS (/api/config, 2026-11-27), so the new board starts calibrated.
+constexpr long DEF_FULL[2]  = {1317573, 542885};
+constexpr long DEF_EMPTY[2] = {499914, -305551};
 constexpr long DEF_REF[2]   = {13150, 13860};
 constexpr const char* DEF_NOTE[2] = {
     "",

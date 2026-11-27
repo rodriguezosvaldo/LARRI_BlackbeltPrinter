@@ -18,4 +18,4 @@
 
 // Optional: the other printer's ESP32, for the dashboard (default in config.h).
 // Can also be changed at runtime from the /config page.
-// #define PEER_URL "http://192.168.1.226"
+// #define PEER_URL "http://192.168.1.187"

@@ -6,7 +6,7 @@ Monitoring, alerting and configuration for the lab's two **BlackBelt 3D printers
 | Printer | IP              | Its ESP32 (load cells + monitor) | ntfy topic |
 |---------|-----------------|----------------------------------|------------|
 | 1       | `192.168.1.243` | ESP32-S3, `192.168.1.132` (`bb-p1.local`) | `NTFY1` |
-| 2       | `192.168.1.188` | classic ESP32, `192.168.1.226` (`bb-p2.local`) | `NTFY2` |
+| 2       | `192.168.1.188` | ESP32-S3, `192.168.1.187` (`bb-p2.local`) | `NTFY2` |
 
 Each printer's ESP32 does all the monitoring by itself (alarms,
 spool monitor, dashboard). No PC is needed for alerts; a PC on the same network only stores
@@ -102,7 +102,7 @@ HTTP object model (`/rr_model`) and its two load cells, and sends phone notifica
 | Printer | Board (PlatformIO env) | Cell 1 DOUT / SCK | Cell 2 DOUT / SCK |
 |---------|------------------------|-------------------|-------------------|
 | P1 (.243) | ESP32-S3-WROOM-1 (`p1`) | GPIO 17 / 18 | GPIO 15 / 16 |
-| P2 (.188) | classic ESP32 (`p2`) | GPIO 21 / 22 | GPIO 18 / 19 |
+| P2 (.188) | ESP32-S3-WROOM-1 (`p2`) | GPIO 17 / 18 | GPIO 15 / 16 |
 
 ### Setup
 
@@ -125,7 +125,7 @@ over WiFi:
 
 ```bash
 pio run -e p1_ota -t upload    # P1 at 192.168.1.132; --upload-port <ip> if DHCP changed it
-pio run -e p2_ota -t upload    # P2 at 192.168.1.226
+pio run -e p2_ota -t upload    # P2 at 192.168.1.187
 ```
 
 or from the browser at `http://<esp32-ip>/update` (the "firmware" link on the dashboard) with

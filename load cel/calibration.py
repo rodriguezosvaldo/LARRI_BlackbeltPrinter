@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 P1_IP = "192.168.1.132"  # ESP32 IP address for P1
-P2_IP = "192.168.1.226"  # ESP32 IP address for P2
+P2_IP = "192.168.1.187"  # ESP32 IP address for P2
 
 # Usage (each printer's ESP32 has two cells):
 #   python calibration.py                         -> both printers over WiFi (P1_IP and P2_IP)
